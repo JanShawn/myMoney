@@ -1,0 +1,10 @@
+node_modules/
+.nuxt/
+.output/
+dist/
+data/config.json
+data/*.xlsx
+data/backups/
+.env
+*.log
+.DS_Store

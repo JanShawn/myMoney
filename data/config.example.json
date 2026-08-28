@@ -1,0 +1,37 @@
+{
+  "version": 2,
+  "settings": {
+    "baseCurrency": "TWD",
+    "snapshotDisplayLimit": 30,
+    "lastSavedAt": null
+  },
+  "groups": [
+    { "id": "group-bank", "name": "銀行帳戶", "order": 0, "archived": false },
+    { "id": "group-invest", "name": "投資帳戶", "order": 1, "archived": false },
+    { "id": "group-other", "name": "其他項目", "order": 2, "archived": false },
+    { "id": "group-debt", "name": "貸款", "order": 3, "archived": false }
+  ],
+  "items": [
+    {
+      "id": "item-cash",
+      "groupId": "group-other",
+      "name": "身上現金",
+      "behavior": "cash",
+      "assetClass": "cash",
+      "liquidity": "available",
+      "includeInAssets": true,
+      "amount": 0,
+      "currency": "TWD",
+      "exchangeRate": 1,
+      "archived": false
+    }
+  ],
+  "holdings": [],
+  "snapshots": [],
+  "market": {
+    "taiex": null,
+    "ma240": null,
+    "lastUpdatedAt": null,
+    "source": "manual"
+  }
+}
