@@ -9,6 +9,7 @@
     "generate": "nuxt generate",
     "preview": "serve .output/public -l 4173",
     "start": "npm run preview",
+    "update:market": "node scripts/update-market-catalog.mjs",
     "test": "vitest run"
   },
   "dependencies": {

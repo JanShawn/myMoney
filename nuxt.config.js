@@ -4,9 +4,10 @@ export default defineNuxtConfig({
   compatibilityDate: '2026-08-01',
   ssr: false,
   devtools: { enabled: true },
+  devServer: { host: '127.0.0.1', port: 3000 },
   modules: ['@pinia/nuxt'],
   css: ['~/assets/css/main.css'],
-  vite: { plugins: [tailwindcss()] },
+  vite: { plugins: [tailwindcss()], server: { strictPort: true } },
   nitro: { preset: 'static' },
   app: {
     head: {

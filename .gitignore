@@ -5,6 +5,8 @@ dist/
 data/config.json
 data/*.xlsx
 data/backups/
+/data.json
+/myMoney-data*.json
 .env
 *.log
 .DS_Store

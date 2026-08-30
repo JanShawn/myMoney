@@ -1,60 +1,238 @@
 <script setup>
-import { Minus, Plus, Save, Trash2 } from '@lucide/vue'
+import { ArrowDown, ArrowUp, CalendarCheck, Minus, Plus, RotateCcw, Save, Trash2 } from '@lucide/vue'
 import { useMoneyStore } from '~/stores/money'
+import { SYSTEM_CASH_ITEM_ID } from '~/services/money-domain'
 
 const store = useMoneyStore()
-const selectedId = ref('')
-const baseAmount = ref(0)
-const rows = ref([{ id: crypto.randomUUID(), label: '', amount: 0 }])
-const cashItems = computed(() => store.activeItems.filter((item) => item.behavior === 'cash'))
-const selected = computed(() => cashItems.value.find((item) => item.id === selectedId.value))
-const adjustments = computed(() => rows.value.reduce((sum, row) => sum + Number(row.amount || 0), 0))
-const result = computed(() => Number(baseAmount.value || 0) + adjustments.value)
+const expectedAmount = ref(0)
+const appliedMessage = ref('')
+const createRow = (operation = 'add', amount = '') => ({ id: crypto.randomUUID(), label: '', operation, amount })
+const rows = ref([createRow()])
+const selected = computed(() => store.activeItems.find((item) => item.id === SYSTEM_CASH_ITEM_ID))
+const selectedId = computed(() => selected.value?.id || '')
+const lastReconciledText = computed(() => selected.value?.lastReconciledAt
+  ? new Intl.DateTimeFormat('zh-TW', { dateStyle: 'long', timeStyle: 'short' }).format(new Date(selected.value.lastReconciledAt))
+  : '尚未完成現金驗算')
+const signedAmount = (row) => (row.operation === 'subtract' ? -1 : 1) * Number(row.amount || 0)
+const formatIntegerInput = (value) => value === '' || value == null
+  ? ''
+  : new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(Number(value) || 0)
+const actualAmount = computed(() => rows.value.reduce((sum, row) => sum + signedAmount(row), 0))
+const difference = computed(() => actualAmount.value - Number(expectedAmount.value || 0))
+const hasDetails = computed(() => rows.value.some((row) => Number(row.amount) > 0))
+const comparisonState = computed(() => {
+  if (!hasDetails.value) return { tone: 'idle', value: '等待輸入', caption: '加入實際現金明細後會自動比較。' }
+  if (actualAmount.value < 0) return { tone: 'error', value: '明細有誤', caption: '扣除金額不能大於加入金額。' }
+  if (difference.value === 0) return { tone: 'success', value: '金額已對齊', caption: '帳面金額與實際明細相同。' }
+  if (difference.value > 0) return { tone: 'warning', value: `多 ${money(Math.abs(difference.value))}`, caption: '實際現金高於帳面金額。' }
+  return { tone: 'error', value: `少 ${money(Math.abs(difference.value))}`, caption: '實際現金低於帳面金額。' }
+})
+const hydratingDraft = ref(false)
+let draftTimer
 
-watch(cashItems, (items) => {
-  if (!selectedId.value && items[0]) selectedId.value = items[0].id
+watch(selectedId, (accountId, previousId) => {
+  clearTimeout(draftTimer)
+  if (previousId && !hydratingDraft.value) persistDraft(previousId)
+  hydrateDraft(accountId)
 }, { immediate: true })
-watch(selected, (item) => { if (item) baseAmount.value = Number(item.amount || 0) }, { immediate: true })
 
-function addRow(sign = 1) { rows.value.push({ id: crypto.randomUUID(), label: '', amount: sign }) }
-async function applyResult() {
-  if (!selected.value) return
-  await store.updateItem(selected.value.id, { amount: result.value })
-  baseAmount.value = result.value
-  rows.value = [{ id: crypto.randomUUID(), label: '', amount: 0 }]
+watch(() => store.loading, (loading, wasLoading) => {
+  if (wasLoading && !loading && selectedId.value) hydrateDraft(selectedId.value)
+})
+
+function hydrateDraft(accountId) {
+  const item = selected.value?.id === accountId ? selected.value : null
+  if (!item) return
+  const draft = store.config.cashDrafts?.[accountId]
+  hydratingDraft.value = true
+  expectedAmount.value = Math.max(0, Number(draft?.expectedAmount ?? draft?.baseAmount ?? item.amount ?? 0))
+  rows.value = draft?.rows?.length
+    ? draft.rows.map((row) => ({
+        id: crypto.randomUUID(),
+        label: row.label || '',
+        operation: row.operation || (Number(row.amount) < 0 ? 'subtract' : 'add'),
+        amount: Math.abs(Number(row.amount || 0)) || ''
+      }))
+    : [createRow()]
+  nextTick(() => { hydratingDraft.value = false })
 }
+
+watch([expectedAmount, rows], () => {
+  if (hydratingDraft.value || !selectedId.value) return
+  clearTimeout(draftTimer)
+  draftTimer = setTimeout(() => persistDraft(), 350)
+}, { deep: true })
+
+function addRow(operation = 'add') { rows.value.push(createRow(operation)) }
+function moveRow(index, direction) {
+  const targetIndex = index + direction
+  if (targetIndex < 0 || targetIndex >= rows.value.length) return
+  const reordered = [...rows.value]
+  const [row] = reordered.splice(index, 1)
+  reordered.splice(targetIndex, 0, row)
+  rows.value = reordered
+  appliedMessage.value = ''
+}
+function updateExpectedAmount(event) {
+  const raw = event.target.value
+  const sanitized = raw.includes('-') ? '0' : raw.split('.')[0].replace(/\D/g, '')
+  expectedAmount.value = Number(sanitized || 0)
+  event.target.value = formatIntegerInput(expectedAmount.value)
+  appliedMessage.value = ''
+}
+function updateAdjustment(row, event) {
+  const raw = event.target.value
+  const sanitized = raw.split('.')[0].replace(/\D/g, '')
+  row.amount = sanitized ? Number(sanitized) : ''
+  event.target.value = formatIntegerInput(row.amount)
+}
+function draftPayload() {
+  return {
+    expectedAmount: Number(expectedAmount.value || 0),
+    rows: rows.value.map((row) => ({ label: row.label, operation: row.operation, amount: signedAmount(row) }))
+  }
+}
+async function persistDraft(accountId = selectedId.value) {
+  if (!accountId) return
+  const payload = draftPayload()
+  try {
+    await store.updateCashDraft(accountId, payload)
+  } catch {
+    // Store 已顯示具體的保存錯誤。
+  }
+}
+async function clearDraft() {
+  clearTimeout(draftTimer)
+  hydratingDraft.value = true
+  expectedAmount.value = ''
+  rows.value = rows.value.map((row) => ({ ...row, amount: '' }))
+  appliedMessage.value = ''
+  await nextTick()
+  hydratingDraft.value = false
+  await persistDraft()
+}
+async function applyResult() {
+  if (!selected.value || !hasDetails.value || actualAmount.value < 0) return
+  clearTimeout(draftTimer)
+  const previousDifference = difference.value
+  const reconciledAt = new Date().toISOString()
+  await store.updateItem(selected.value.id, {
+    amount: actualAmount.value,
+    lastReconciledAt: reconciledAt,
+    lastReconciledAmount: actualAmount.value,
+    lastReconciledDifference: previousDifference
+  })
+  expectedAmount.value = actualAmount.value
+  await persistDraft()
+  appliedMessage.value = previousDifference === 0
+    ? `「${selected.value.name}」原本就與明細合計相同，帳戶金額維持 ${money(actualAmount.value)}。`
+    : `已將「${selected.value.name}」更新為 ${money(actualAmount.value)}，本次調整 ${previousDifference > 0 ? '增加' : '減少'} ${money(Math.abs(previousDifference))}。`
+}
+onBeforeUnmount(() => {
+  clearTimeout(draftTimer)
+  if (selectedId.value && !hydratingDraft.value) persistDraft()
+})
 const money = (value) => new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', maximumFractionDigits: 0 }).format(value || 0)
 </script>
 
 <template>
   <div>
-    <header class="page-header"><div><div class="eyebrow">Cash reconciliation</div><h1 class="page-title">現金驗算</h1><p class="page-subtitle">把複雜的現金來源暫時拆開加減，最後只保存驗算結果。</p></div></header>
-    <div class="grid-2" style="align-items: start">
-      <section class="card card-body">
-        <h2 class="section-title">驗算明細</h2>
-        <div v-if="cashItems.length" class="stack" style="margin-top: 16px">
-          <div class="form-grid">
-            <div class="field"><label for="cash-account">現金帳戶</label><select id="cash-account" v-model="selectedId" class="select"><option v-for="item in cashItems" :key="item.id" :value="item.id">{{ item.name }}</option></select></div>
-            <div class="field"><label for="cash-base">開始金額</label><input id="cash-base" v-model.number="baseAmount" class="input amount" type="number" step="1" /></div>
+    <PageHeader eyebrow="Cash reconciliation" title="現金驗算" description="先輸入目前帳面上的現金總額，再用下方實際明細確認金額是否對齊。" />
+    <div class="page-grid page-grid--sidebar">
+      <UiPanel title="驗算明細" description="項目名稱與加減方式會持續保留；需要重新驗算時只要清除金額。">
+        <template #action><button v-if="selected" class="btn btn-ghost" type="button" :disabled="store.saving" @click="clearDraft"><RotateCcw :size="16" />清除所有金額</button></template>
+        <div v-if="selected" class="stack">
+          <div class="baseline-card">
+            <div><span class="baseline-card__eyebrow">對帳基準</span><label for="cash-expected">目前現金總金額</label><small>預設帶入「身上現金」目前的帳面金額，可直接修改。</small></div>
+            <input id="cash-expected" :value="formatIntegerInput(expectedAmount)" class="input input--amount baseline-card__input" type="text" inputmode="numeric" pattern="[0-9,]*" @input="updateExpectedAmount" />
           </div>
-          <div class="divider" />
-          <div v-for="(row, index) in rows" :key="row.id" class="form-grid" style="grid-template-columns: 1.4fr 1fr auto">
+          <div class="detail-heading"><div><h3>實際現金明細</h3><p>逐項加入實際持有的現金；需要扣除代墊或支出時切換為「扣除」。</p></div></div>
+          <div v-for="(row, index) in rows" :key="row.id" class="adjustment-row" :class="`adjustment-row--${row.operation}`">
             <div class="field"><label :for="`cash-label-${row.id}`">項目 {{ index + 1 }}</label><input :id="`cash-label-${row.id}`" v-model="row.label" class="input" placeholder="例如：錢包零錢、代墊款" /></div>
-            <div class="field"><label :for="`cash-value-${row.id}`">加減金額</label><input :id="`cash-value-${row.id}`" v-model.number="row.amount" class="input amount" type="number" step="1" placeholder="支出填負數" /></div>
-            <button class="btn btn-ghost" type="button" aria-label="移除此列" style="align-self: end" :disabled="rows.length === 1" @click="rows.splice(index, 1)"><Trash2 :size="18" /></button>
+            <div class="field">
+              <span class="field-label">計算方式</span>
+              <div class="operation-switch" role="group" :aria-label="`項目 ${index + 1} 計算方式`">
+                <button class="operation-button operation-button--add" :class="{ active: row.operation === 'add' }" type="button" :aria-pressed="row.operation === 'add'" @click="row.operation = 'add'"><Plus :size="16" />加入</button>
+                <button class="operation-button operation-button--subtract" :class="{ active: row.operation === 'subtract' }" type="button" :aria-pressed="row.operation === 'subtract'" @click="row.operation = 'subtract'"><Minus :size="16" />扣除</button>
+              </div>
+            </div>
+            <div class="field"><label :for="`cash-value-${row.id}`">金額</label><input :id="`cash-value-${row.id}`" :value="formatIntegerInput(row.amount)" class="input input--amount" type="text" inputmode="numeric" pattern="[0-9,]*" placeholder="請輸入正整數" @input="updateAdjustment(row, $event)" /></div>
+            <div class="adjustment-actions">
+              <button class="btn btn-ghost btn-icon" type="button" :aria-label="`上移項目 ${index + 1}`" :disabled="index === 0" @click="moveRow(index, -1)"><ArrowUp :size="16" /></button>
+              <button class="btn btn-ghost btn-icon" type="button" :aria-label="`下移項目 ${index + 1}`" :disabled="index === rows.length - 1" @click="moveRow(index, 1)"><ArrowDown :size="16" /></button>
+              <button class="btn btn-ghost btn-icon remove-row" type="button" :aria-label="`移除項目 ${index + 1}`" :disabled="rows.length === 1" @click="rows.splice(index, 1)"><Trash2 :size="16" /></button>
+            </div>
           </div>
-          <div class="toolbar">
-            <div style="display:flex; gap:8px"><button class="btn btn-secondary" type="button" @click="addRow(1)"><Plus :size="17" />新增加項</button><button class="btn btn-secondary" type="button" @click="addRow(-1)"><Minus :size="17" />新增減項</button></div>
+          <div class="inline-cluster">
+            <button class="btn btn-secondary" type="button" @click="addRow('add')"><Plus :size="17" />新增加項</button>
+            <button class="btn btn-secondary" type="button" @click="addRow('subtract')"><Minus :size="17" />新增減項</button>
           </div>
-          <div class="notice">這些明細只存在目前畫面。套用結果或離開頁面後不會保存，JSON 快照也只會記錄最後金額。</div>
+          <AppNotice title="明細已自動保存">每列先選「加入」或「扣除」，金額只輸入正整數；離開頁面或套用結果後明細仍會保留。</AppNotice>
         </div>
-        <div v-else class="empty"><div><strong>還沒有現金驗算帳戶</strong><NuxtLink to="/accounts">建立輸入方式為「現金驗算」的項目</NuxtLink></div></div>
-      </section>
-      <aside class="card card-body">
-        <div class="eyebrow">Reconciled result</div><h2 class="section-title" style="margin-top: 5px">驗算結果</h2>
-        <div style="margin: 36px 0; text-align: center"><div class="muted">{{ selected?.name || '尚未選擇帳戶' }}</div><div class="metric-value" style="font-size: 2.4rem">{{ money(result) }}</div><div class="row-meta">開始 {{ money(baseAmount) }} ＋ 調整 {{ money(adjustments) }}</div></div>
-        <button class="btn btn-primary" style="width:100%" :disabled="!selected || store.saving" @click="applyResult"><Save :size="18" />套用到現金帳戶</button>
-      </aside>
+        <EmptyState v-else title="系統現金帳戶尚未載入" description="請重新整理頁面；系統會自動補回受保護的現金群組與帳戶。" />
+      </UiPanel>
+      <UiPanel as="aside" eyebrow="Reconciled result" title="驗算結果" class="result-panel">
+        <div class="reconciled-time"><CalendarCheck :size="18" /><div><span>上次現金驗算</span><strong>{{ lastReconciledText }}</strong></div></div>
+        <div class="comparison-summary">
+          <div class="summary-item"><span class="summary-item__label">帳面現金總額</span><strong class="summary-item__value">{{ money(expectedAmount) }}</strong></div>
+          <div class="summary-item"><span class="summary-item__label">實際明細合計</span><strong class="summary-item__value">{{ money(actualAmount) }}</strong></div>
+        </div>
+        <div class="comparison-result" :class="`comparison-result--${comparisonState.tone}`" role="status" aria-live="polite">
+          <span>驗算差額</span>
+          <strong>{{ comparisonState.value }}</strong>
+          <small>{{ comparisonState.caption }}</small>
+        </div>
+        <AppNotice v-if="appliedMessage" class="applied-notice" tone="success" title="現金帳戶已更新">{{ appliedMessage }}</AppNotice>
+        <button class="btn btn-primary btn-block apply-button" :disabled="!selected || !hasDetails || actualAmount < 0 || store.saving" @click="applyResult"><Save :size="18" />以明細合計更新現金帳戶</button>
+      </UiPanel>
     </div>
   </div>
 </template>
+
+<style scoped>
+.adjustment-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(160px, .72fr) minmax(105px, .55fr) auto; align-items: end; gap: 10px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-muted); }
+.adjustment-row--add { border-left: 3px solid var(--success); }
+.adjustment-row--subtract { border-left: 3px solid var(--danger); }
+.operation-switch { min-height: 46px; display: grid; grid-template-columns: 1fr 1fr; padding: 3px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); }
+.operation-button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font: inherit; font-size: .78rem; font-weight: 720; cursor: pointer; }
+.operation-button--add.active { background: var(--success-soft); color: var(--success); }
+.operation-button--subtract.active { background: var(--danger-soft); color: var(--danger); }
+.adjustment-actions { display: flex; align-items: center; gap: 1px; margin-bottom: 4px; }
+.adjustment-actions .btn-icon { width: 30px; min-height: 34px; }
+.adjustment-actions .remove-row { color: var(--danger); }
+.result-panel { position: sticky; top: 24px; }
+.reconciled-time { display: flex; align-items: center; gap: 10px; margin: 2px 0 16px; padding: 12px 13px; border-radius: 12px; background: var(--surface-muted); color: var(--primary); }
+.reconciled-time > div { display: grid; gap: 2px; }
+.reconciled-time span { color: var(--muted); font-size: .7rem; }
+.reconciled-time strong { color: var(--text); font-size: .8rem; line-height: 1.4; }
+.baseline-card { display: grid; grid-template-columns: minmax(0, 1fr) minmax(160px, .52fr); align-items: center; gap: 22px; padding: 18px; border: 1px solid #c9dfda; border-radius: var(--radius-md); background: linear-gradient(135deg, #f0f8f6, #fbfdfc); }
+.baseline-card > div { display: grid; gap: 4px; }
+.baseline-card__eyebrow { color: var(--primary); font-size: .68rem; font-weight: 780; letter-spacing: .09em; text-transform: uppercase; }
+.baseline-card label { color: var(--text); font-size: .94rem; font-weight: 750; }
+.baseline-card small { color: var(--muted); font-size: .74rem; line-height: 1.5; }
+.baseline-card__input { min-height: 52px; font-size: 1.3rem; font-weight: 780; }
+.detail-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
+.detail-heading h3 { margin: 0; font-size: 1rem; }
+.detail-heading p { margin: 5px 0 0; color: var(--muted); font-size: .78rem; line-height: 1.5; }
+.detail-heading strong { flex: 0 0 auto; font-size: 1.35rem; font-variant-numeric: tabular-nums; }
+.comparison-summary { margin: 4px 0 18px; }
+.comparison-result { display: grid; gap: 5px; padding: 18px; border: 1px solid var(--border); border-radius: 15px; background: var(--surface-muted); }
+.comparison-result > span { color: var(--muted); font-size: .72rem; font-weight: 720; }
+.comparison-result > strong { color: var(--text); font-size: 1.45rem; letter-spacing: -.025em; }
+.comparison-result > small { color: var(--muted); font-size: .76rem; line-height: 1.45; }
+.comparison-result--success { border-color: #bfe0d2; background: var(--success-soft); }
+.comparison-result--success > strong { color: var(--success); }
+.comparison-result--warning { border-color: #ead8ab; background: var(--warning-soft); }
+.comparison-result--warning > strong { color: var(--warning); }
+.comparison-result--error { border-color: #ecc7c3; background: var(--danger-soft); }
+.comparison-result--error > strong { color: var(--danger); }
+.applied-notice { margin-top: 14px; }
+.apply-button { margin-top: 18px; }
+@media (max-width: 880px) { .result-panel { position: static; } }
+@media (max-width: 620px) {
+  .baseline-card { grid-template-columns: 1fr; }
+  .adjustment-row { grid-template-columns: minmax(0, 1fr); }
+  .adjustment-row > .field { grid-column: 1 / -1; }
+  .adjustment-actions { grid-column: 1 / -1; justify-content: flex-end; margin: 0; }
+}
+</style>

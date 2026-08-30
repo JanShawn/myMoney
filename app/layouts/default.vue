@@ -10,10 +10,10 @@ onMounted(() => store.load())
     <a class="skip-link" href="#main-content">跳到主要內容</a>
     <AppNavigation />
     <main id="main-content" class="content" tabindex="-1">
-      <div v-if="store.error" class="notice notice-error" role="alert" aria-live="assertive" style="margin-bottom: 16px">
-        <span>{{ store.error }}</span>
-        <button class="btn btn-ghost" type="button" @click="store.error = ''">關閉</button>
-      </div>
+      <AppNotice v-if="store.error" tone="error" title="操作沒有完成" class="space-after" aria-live="assertive">
+        {{ store.error }}
+        <template #action><button class="btn btn-ghost" type="button" @click="store.error = ''">關閉</button></template>
+      </AppNotice>
       <slot />
     </main>
   </div>

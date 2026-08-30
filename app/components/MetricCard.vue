@@ -3,7 +3,7 @@ defineProps({ label: String, value: String, note: String, tone: { type: String, 
 </script>
 
 <template>
-  <article class="card metric-card">
+  <article class="panel metric-card">
     <div class="metric-label"><slot name="icon" />{{ label }}</div>
     <div class="metric-value" :class="tone">{{ value }}</div>
     <div v-if="note" class="metric-note">{{ note }}</div>

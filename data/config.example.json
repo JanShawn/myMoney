@@ -8,13 +8,14 @@
   "groups": [
     { "id": "group-bank", "name": "銀行帳戶", "order": 0, "archived": false },
     { "id": "group-invest", "name": "投資帳戶", "order": 1, "archived": false },
-    { "id": "group-other", "name": "其他項目", "order": 2, "archived": false },
-    { "id": "group-debt", "name": "貸款", "order": 3, "archived": false }
+    { "id": "group-cash", "name": "現金", "order": 2, "archived": false, "system": true },
+    { "id": "group-other", "name": "其他項目", "order": 3, "archived": false },
+    { "id": "group-debt", "name": "貸款", "order": 4, "archived": false }
   ],
   "items": [
     {
       "id": "item-cash",
-      "groupId": "group-other",
+      "groupId": "group-cash",
       "name": "身上現金",
       "behavior": "cash",
       "assetClass": "cash",
@@ -23,15 +24,21 @@
       "amount": 0,
       "currency": "TWD",
       "exchangeRate": 1,
-      "archived": false
+      "archived": false,
+      "system": true
     }
   ],
+  "cashDrafts": {},
   "holdings": [],
   "snapshots": [],
   "market": {
     "taiex": null,
     "ma240": null,
     "lastUpdatedAt": null,
-    "source": "manual"
+    "source": "manual",
+    "fxRates": { "TWD": 1 },
+    "fxUpdatedAt": null,
+    "fxNextUpdateAt": null,
+    "fxSource": null
   }
 }
