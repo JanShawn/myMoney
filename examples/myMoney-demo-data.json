@@ -1,0 +1,442 @@
+{
+  "version": 2,
+  "settings": {
+    "baseCurrency": "TWD",
+    "snapshotDisplayLimit": 30,
+    "allocationTargets": {
+      "cash": 30,
+      "stocks": 50,
+      "bonds": 20
+    },
+    "lastSavedAt": "2026-09-01T00:00:00.000Z"
+  },
+  "groups": [
+    {
+      "id": "group-bank",
+      "name": "銀行帳戶",
+      "order": 0,
+      "archived": false
+    },
+    {
+      "id": "group-invest",
+      "name": "投資帳戶",
+      "order": 1,
+      "archived": false
+    },
+    {
+      "id": "group-cash",
+      "name": "現金",
+      "order": 2,
+      "archived": false,
+      "system": true
+    },
+    {
+      "id": "group-other",
+      "name": "其他項目",
+      "order": 3,
+      "archived": false
+    },
+    {
+      "id": "group-debt",
+      "name": "貸款",
+      "order": 4,
+      "archived": false
+    }
+  ],
+  "items": [
+    {
+      "id": "item-cash",
+      "groupId": "group-cash",
+      "name": "身上現金",
+      "behavior": "cash",
+      "assetClass": "cash",
+      "liquidity": "available",
+      "includeInAssets": true,
+      "amount": 3200,
+      "currency": "TWD",
+      "exchangeRate": 1,
+      "archived": false,
+      "system": true,
+      "lastReconciledAt": "2026-08-31T12:30:00.000Z",
+      "lastReconciledAmount": 3200,
+      "lastReconciledDifference": 0
+    },
+    {
+      "id": "item-demo-main-bank",
+      "groupId": "group-bank",
+      "name": "範例薪轉帳戶",
+      "behavior": "manual",
+      "assetClass": "cash",
+      "assetClassDetail": "",
+      "liquidity": "available",
+      "includeInAssets": true,
+      "amount": 168000,
+      "currency": "TWD",
+      "exchangeRate": 1,
+      "archived": false
+    },
+    {
+      "id": "item-demo-emergency-fund",
+      "groupId": "group-bank",
+      "name": "範例緊急預備金",
+      "behavior": "manual",
+      "assetClass": "cash",
+      "assetClassDetail": "",
+      "liquidity": "locked",
+      "includeInAssets": true,
+      "amount": 300000,
+      "currency": "TWD",
+      "exchangeRate": 1,
+      "archived": false
+    },
+    {
+      "id": "item-demo-usd",
+      "groupId": "group-bank",
+      "name": "範例美元帳戶",
+      "behavior": "foreign",
+      "assetClass": "foreign",
+      "assetClassDetail": "",
+      "liquidity": "convertible",
+      "includeInAssets": true,
+      "amount": 2500,
+      "currency": "USD",
+      "exchangeRate": 30.8,
+      "archived": false
+    },
+    {
+      "id": "item-demo-jpy",
+      "groupId": "group-bank",
+      "name": "範例日圓帳戶",
+      "behavior": "foreign",
+      "assetClass": "foreign",
+      "assetClassDetail": "",
+      "liquidity": "convertible",
+      "includeInAssets": true,
+      "amount": 120000,
+      "currency": "JPY",
+      "exchangeRate": 0.21,
+      "archived": false
+    },
+    {
+      "id": "item-demo-brokerage",
+      "groupId": "group-invest",
+      "name": "範例券商交割戶",
+      "behavior": "manual",
+      "assetClass": "cash",
+      "assetClassDetail": "",
+      "liquidity": "available",
+      "includeInAssets": true,
+      "amount": 65000,
+      "currency": "TWD",
+      "exchangeRate": 1,
+      "archived": false
+    },
+    {
+      "id": "item-demo-vehicle",
+      "groupId": "group-other",
+      "name": "範例交通工具估值",
+      "behavior": "manual",
+      "assetClass": "other",
+      "assetClassDetail": "交通工具",
+      "liquidity": "locked",
+      "includeInAssets": true,
+      "amount": 220000,
+      "currency": "TWD",
+      "exchangeRate": 1,
+      "archived": false
+    },
+    {
+      "id": "item-demo-loan",
+      "groupId": "group-debt",
+      "name": "範例信貸餘額",
+      "behavior": "liability",
+      "assetClass": "liability",
+      "assetClassDetail": "",
+      "liquidity": "locked",
+      "includeInAssets": false,
+      "amount": 180000,
+      "currency": "TWD",
+      "exchangeRate": 1,
+      "archived": false
+    }
+  ],
+  "cashDrafts": {
+    "item-cash": {
+      "expectedAmount": 3200,
+      "rows": [
+        {
+          "label": "範例錢包現金",
+          "operation": "add",
+          "amount": 2500
+        },
+        {
+          "label": "範例零錢盒",
+          "operation": "add",
+          "amount": 800
+        },
+        {
+          "label": "範例代墊款",
+          "operation": "subtract",
+          "amount": -100
+        }
+      ]
+    }
+  },
+  "recurringCashflowItems": [
+    {
+      "id": "cashflow-demo-salary",
+      "name": "範例每月薪資",
+      "type": "income",
+      "amount": 65000,
+      "frequency": "monthly",
+      "occurrenceMonth": 1,
+      "order": 0
+    },
+    {
+      "id": "cashflow-demo-bonus",
+      "name": "範例年度獎金",
+      "type": "income",
+      "amount": 100000,
+      "frequency": "annual",
+      "occurrenceMonth": 2,
+      "order": 1
+    },
+    {
+      "id": "cashflow-demo-rent",
+      "name": "範例房租",
+      "type": "expense",
+      "amount": 18000,
+      "frequency": "monthly",
+      "occurrenceMonth": 1,
+      "order": 0
+    },
+    {
+      "id": "cashflow-demo-living",
+      "name": "範例生活費",
+      "type": "expense",
+      "amount": 15000,
+      "frequency": "monthly",
+      "occurrenceMonth": 1,
+      "order": 1
+    },
+    {
+      "id": "cashflow-demo-insurance",
+      "name": "範例年度保險",
+      "type": "expense",
+      "amount": 24000,
+      "frequency": "annual",
+      "occurrenceMonth": 3,
+      "order": 2
+    },
+    {
+      "id": "cashflow-demo-travel",
+      "name": "範例旅遊預算",
+      "type": "expense",
+      "amount": 12000,
+      "frequency": "quarterly",
+      "occurrenceMonth": 1,
+      "order": 3
+    }
+  ],
+  "holdings": [
+    {
+      "id": "holding-demo-equity-a",
+      "ticker": "DEMO01",
+      "name": "範例台灣股票 A",
+      "market": "DEMO",
+      "quantity": 1000,
+      "assetClass": "equity",
+      "assetClassDetail": "",
+      "direction": "long",
+      "multiplier": 1,
+      "price": 120,
+      "priceSource": "manual",
+      "priceAsOfDate": "2026-08-31",
+      "priceSourceLabel": "範例手動價格",
+      "yahooUrl": "",
+      "liquidity": "convertible",
+      "includeInAssets": true,
+      "accountId": "item-demo-brokerage",
+      "order": 0,
+      "archived": false
+    },
+    {
+      "id": "holding-demo-equity-b",
+      "ticker": "DEMO02",
+      "name": "範例台灣股票 B",
+      "market": "DEMO",
+      "quantity": 2000,
+      "assetClass": "equity",
+      "assetClassDetail": "",
+      "direction": "long",
+      "multiplier": 1,
+      "price": 42,
+      "priceSource": "manual",
+      "priceAsOfDate": "2026-08-31",
+      "priceSourceLabel": "範例手動價格",
+      "yahooUrl": "",
+      "liquidity": "convertible",
+      "includeInAssets": true,
+      "accountId": "item-demo-brokerage",
+      "order": 1,
+      "archived": false
+    },
+    {
+      "id": "holding-demo-bond",
+      "ticker": "DEMO-BOND",
+      "name": "範例債券商品",
+      "market": "DEMO",
+      "quantity": 1000,
+      "assetClass": "bond",
+      "assetClassDetail": "",
+      "direction": "long",
+      "multiplier": 1,
+      "price": 52,
+      "priceSource": "manual",
+      "priceAsOfDate": "2026-08-31",
+      "priceSourceLabel": "範例手動價格",
+      "yahooUrl": "",
+      "liquidity": "convertible",
+      "includeInAssets": true,
+      "accountId": "item-demo-brokerage",
+      "order": 2,
+      "archived": false
+    }
+  ],
+  "snapshots": [
+    {
+      "date": "2026-04-01",
+      "verifiedAt": "2026-04-01T12:00:00.000Z",
+      "totalAssets": 940000,
+      "totalLiabilities": 210000,
+      "netWorth": 730000,
+      "availableAssets": 210000,
+      "availableCash": 280000,
+      "restrictedCash": 270000,
+      "totalStocks": 165000,
+      "stockRatio": 0.175532,
+      "totalBonds": 50000,
+      "bondRatio": 0.053191,
+      "totalCash": 470000,
+      "totalForeign": 80000,
+      "totalOther": 175000,
+      "taiex": 18800,
+      "ma240": 18050,
+      "note": "完全虛構的範例盤點資料。"
+    },
+    {
+      "date": "2026-05-01",
+      "verifiedAt": "2026-05-01T12:00:00.000Z",
+      "totalAssets": 973000,
+      "totalLiabilities": 204000,
+      "netWorth": 769000,
+      "availableAssets": 220000,
+      "availableCash": 294000,
+      "restrictedCash": 270000,
+      "totalStocks": 180000,
+      "stockRatio": 0.184995,
+      "totalBonds": 50000,
+      "bondRatio": 0.051387,
+      "totalCash": 480000,
+      "totalForeign": 84000,
+      "totalOther": 179000,
+      "taiex": 19250,
+      "ma240": 18220,
+      "note": "完全虛構的範例盤點資料。"
+    },
+    {
+      "date": "2026-06-01",
+      "verifiedAt": "2026-06-01T12:00:00.000Z",
+      "totalAssets": 1015000,
+      "totalLiabilities": 198000,
+      "netWorth": 817000,
+      "availableAssets": 235000,
+      "availableCash": 313000,
+      "restrictedCash": 270000,
+      "totalStocks": 190000,
+      "stockRatio": 0.187192,
+      "totalBonds": 51000,
+      "bondRatio": 0.050246,
+      "totalCash": 495000,
+      "totalForeign": 88000,
+      "totalOther": 191000,
+      "taiex": 19800,
+      "ma240": 18460,
+      "note": "完全虛構的範例盤點資料。"
+    },
+    {
+      "date": "2026-07-01",
+      "verifiedAt": "2026-07-01T12:00:00.000Z",
+      "totalAssets": 1053000,
+      "totalLiabilities": 192000,
+      "netWorth": 861000,
+      "availableAssets": 250000,
+      "availableCash": 332000,
+      "restrictedCash": 270000,
+      "totalStocks": 198000,
+      "stockRatio": 0.188034,
+      "totalBonds": 52000,
+      "bondRatio": 0.049383,
+      "totalCash": 510000,
+      "totalForeign": 92000,
+      "totalOther": 201000,
+      "taiex": 20350,
+      "ma240": 18730,
+      "note": "完全虛構的範例盤點資料。"
+    },
+    {
+      "date": "2026-08-01",
+      "verifiedAt": "2026-08-01T12:00:00.000Z",
+      "totalAssets": 1082000,
+      "totalLiabilities": 186000,
+      "netWorth": 896000,
+      "availableAssets": 265000,
+      "availableCash": 341000,
+      "restrictedCash": 280000,
+      "totalStocks": 205000,
+      "stockRatio": 0.189464,
+      "totalBonds": 52000,
+      "bondRatio": 0.048059,
+      "totalCash": 525000,
+      "totalForeign": 96000,
+      "totalOther": 204000,
+      "taiex": 20700,
+      "ma240": 19020,
+      "note": "完全虛構的範例盤點資料。"
+    },
+    {
+      "date": "2026-09-01",
+      "verifiedAt": "2026-09-01T00:00:00.000Z",
+      "totalAssets": 1114400,
+      "totalLiabilities": 180000,
+      "netWorth": 934400,
+      "availableAssets": 236200,
+      "availableCash": 338400,
+      "restrictedCash": 300000,
+      "totalStocks": 204000,
+      "stockRatio": 0.183058,
+      "totalBonds": 52000,
+      "bondRatio": 0.046662,
+      "totalCash": 536200,
+      "totalForeign": 102200,
+      "totalOther": 220000,
+      "taiex": 21050,
+      "ma240": 19300,
+      "note": "完全虛構的範例盤點資料；數字不代表真實市場行情。"
+    }
+  ],
+  "market": {
+    "taiex": 21050,
+    "ma240": 19300,
+    "lastUpdatedAt": "2026-09-01T00:00:00.000Z",
+    "source": "manual",
+    "fxRates": {
+      "TWD": 1,
+      "USD": 30.8,
+      "JPY": 0.21
+    },
+    "fxUpdatedAt": "2026-08-31T00:00:00.000Z",
+    "fxNextUpdateAt": "2026-09-02T00:00:00.000Z",
+    "fxSource": "範例資料"
+  }
+}
