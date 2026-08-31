@@ -3,14 +3,12 @@ import { normalizeConfig } from './money-domain'
 const DB_NAME = 'mymoney-local'
 const STORE_NAME = 'key-value'
 const CACHE_KEY = 'current-data'
-const HANDLE_KEY = 'json-file-handle'
-const FILE_META_KEY = 'json-file-meta'
+const LEGACY_HANDLE_KEY = 'json-file-handle'
+const LEGACY_FILE_META_KEY = 'json-file-meta'
+const JSON_BACKUP_META_KEY = 'json-backup-meta'
+const JSON_BACKUP_DATA_KEY = 'json-backup-data'
 const BACKUPS_KEY = 'json-backups'
 const BACKUP_LIMIT = 3
-
-let activeHandle = null
-let lastKnownModified = null
-let pendingConnection = null
 
 function toPlainConfig(input) {
   return normalizeConfig(JSON.parse(JSON.stringify(input ?? null)))
@@ -46,16 +44,6 @@ function configFingerprint(input) {
     hash = Math.imul(hash, 16777619)
   }
   return (hash >>> 0).toString(16).padStart(8, '0')
-}
-
-function summaryDelta(summary, reference) {
-  if (!reference) return null
-  return {
-    accounts: summary.accounts - Number(reference.accounts || 0),
-    holdings: summary.holdings - Number(reference.holdings || 0),
-    snapshots: summary.snapshots - Number(reference.snapshots || 0),
-    recurringCashflowItems: summary.recurringCashflowItems - Number(reference.recurringCashflowItems || 0)
-  }
 }
 
 function recordsById(records = []) {
@@ -102,7 +90,7 @@ export function summarizeConfigChanges(beforeInput, afterInput) {
     if (previous.name !== item.name) details.push(`名稱「${previous.name}」→「${item.name}」`)
     if (Number(previous.amount || 0) !== Number(item.amount || 0)) details.push(`金額 ${formatChangedNumber(previous.amount)} → ${formatChangedNumber(item.amount)} ${item.currency || 'TWD'}`)
     const otherFields = changedFields(previous, item, [
-      ['currency'], ['assetClass'], ['liquidity'], ['includeInAssets'], ['archived'], ['groupId'], ['behavior']
+      ['currency'], ['assetClass'], ['assetClassDetail'], ['liquidity'], ['includeInAssets'], ['archived'], ['groupId'], ['behavior']
     ])
     if (otherFields.length) details.push('帳戶分類或設定')
     if (details.length) changes.push(`帳戶「${item.name}」：${details.join('、')}`)
@@ -122,10 +110,10 @@ export function summarizeConfigChanges(beforeInput, afterInput) {
     const details = []
     if (previous.ticker !== holding.ticker || previous.name !== holding.name) details.push(`名稱或代號改為「${holdingLabel(holding)}」`)
     if (Number(previous.quantity || 0) !== Number(holding.quantity || 0)) details.push(`股數 ${formatChangedNumber(previous.quantity)} → ${formatChangedNumber(holding.quantity)}`)
-    // 自動行情仍會寫入目前資料與 data.json，但不視為使用者資料異動。
+    // 自動行情仍會寫入目前資料與手動 JSON 備份，但不視為使用者資料異動。
     if (holding.priceSource !== 'auto' && Number(previous.price || 0) !== Number(holding.price || 0)) details.push(`價格 ${formatChangedNumber(previous.price)} → ${formatChangedNumber(holding.price)}`)
     const otherFields = changedFields(previous, holding, [
-      ['assetClass'], ['direction'], ['multiplier'], ['includeInAssets'], ['archived'], ['accountId'], ['order']
+      ['assetClass'], ['assetClassDetail'], ['direction'], ['multiplier'], ['liquidity'], ['includeInAssets'], ['archived'], ['accountId'], ['order']
     ])
     if (otherFields.length) details.push('持倉分類、排序或設定')
     if (details.length) changes.push(`持倉「${holdingLabel(holding)}」：${details.join('、')}`)
@@ -192,7 +180,7 @@ function fileTimestamp(date = new Date()) {
     String(date.getMonth() + 1).padStart(2, '0'),
     String(date.getDate()).padStart(2, '0')
   ]
-  const time = `${String(date.getHours()).padStart(2, '0')}${String(date.getMinutes()).padStart(2, '0')}`
+  const time = `${String(date.getHours()).padStart(2, '0')}${String(date.getMinutes()).padStart(2, '0')}${String(date.getSeconds()).padStart(2, '0')}`
   return `${parts.join('-')}-${time}`
 }
 
@@ -234,21 +222,6 @@ async function dbDelete(key) {
   }).finally(() => db.close())
 }
 
-async function readHandle(handle) {
-  const file = await handle.getFile()
-  const text = await file.text()
-  const data = normalizeConfig(JSON.parse(text))
-  lastKnownModified = file.lastModified
-  return data
-}
-
-async function getPermission(handle, request = false) {
-  const options = { mode: 'readwrite' }
-  if ((await handle.queryPermission(options)) === 'granted') return true
-  if (request && (await handle.requestPermission(options)) === 'granted') return true
-  return false
-}
-
 async function addBackup(data) {
   if (!data) return
   const backups = (await dbGet(BACKUPS_KEY)) || []
@@ -256,207 +229,139 @@ async function addBackup(data) {
   await dbSet(BACKUPS_KEY, backups.slice(-BACKUP_LIMIT))
 }
 
-async function saveFileMeta(handle, data, lastSyncedAt = new Date().toISOString()) {
-  await dbSet(FILE_META_KEY, {
-    fileName: handle.name,
-    lastSyncedAt,
-    fingerprint: configFingerprint(data),
-    summary: configSummary(data)
-  })
+function backupFileName(date = new Date()) {
+  return `myMoney-backup-${fileTimestamp(date)}.json`
+}
+
+function validateJsonConfig(parsed, fileName = 'JSON') {
+  const isObject = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+  const hasKnownData = isObject && (
+    'version' in parsed || 'settings' in parsed || Array.isArray(parsed.groups)
+    || Array.isArray(parsed.items) || Array.isArray(parsed.holdings) || Array.isArray(parsed.snapshots)
+  )
+  if (!hasKnownData) throw new Error(`「${fileName}」不是 myMoney 完整備份，未找到帳戶、持倉或設定資料。`)
+  return normalizeConfig(parsed)
+}
+
+async function parseJsonFile(file) {
+  let parsed
+  try {
+    parsed = JSON.parse(await file.text())
+  } catch {
+    throw new Error(`無法讀取「${file.name}」：檔案不是有效的 JSON 格式。`)
+  }
+  return validateJsonConfig(parsed, file.name)
+}
+
+async function getBackupStatus(currentInput) {
+  const current = toPlainConfig(currentInput)
+  let meta = await dbGet(JSON_BACKUP_META_KEY)
+  const backupData = await dbGet(JSON_BACKUP_DATA_KEY)
+
+  if (!meta) {
+    const legacyMeta = await dbGet(LEGACY_FILE_META_KEY)
+    if (legacyMeta) {
+      meta = {
+        fileName: legacyMeta.fileName,
+        createdAt: legacyMeta.lastSyncedAt,
+        fingerprint: legacyMeta.fingerprint,
+        summary: legacyMeta.summary,
+        migrated: true
+      }
+      await dbSet(JSON_BACKUP_META_KEY, meta)
+    }
+  }
+
+  if (!meta) return { exists: false, isCurrent: false, fileName: '', createdAt: null, changes: [], summary: null }
+
+  const changes = backupData ? summarizeConfigChanges(backupData, current) : []
+  const isCurrent = backupData
+    ? changes.length === 0
+    : Boolean(meta.fingerprint) && meta.fingerprint === configFingerprint(current)
+  return {
+    exists: true,
+    isCurrent,
+    fileName: meta.fileName || '',
+    createdAt: meta.createdAt || null,
+    changes,
+    summary: meta.summary || null,
+    comparisonAvailable: Boolean(backupData)
+  }
+}
+
+async function recordJsonBackup(data, fileName, createdAt = new Date().toISOString()) {
+  const normalized = toPlainConfig(data)
+  const meta = {
+    fileName,
+    createdAt,
+    fingerprint: configFingerprint(normalized),
+    summary: configSummary(normalized)
+  }
+  await dbSet(JSON_BACKUP_DATA_KEY, normalized)
+  await dbSet(JSON_BACKUP_META_KEY, meta)
+  return getBackupStatus(normalized)
 }
 
 export function supportsFileSystemAccess() {
-  return typeof window !== 'undefined' && 'showOpenFilePicker' in window && 'showSaveFilePicker' in window
+  return typeof window !== 'undefined' && 'showSaveFilePicker' in window
 }
 
 export async function loadLocalData() {
   const cached = await dbGet(CACHE_KEY)
-  const handle = supportsFileSystemAccess() ? await dbGet(HANDLE_KEY) : null
-  const fileMeta = await dbGet(FILE_META_KEY)
-  if (handle) {
-    activeHandle = handle
-    if (await getPermission(handle)) {
-      const data = await readHandle(handle)
-      await dbSet(CACHE_KEY, data)
-      await saveFileMeta(handle, data)
-      return { data, mode: 'file', fileName: handle.name, permission: 'granted' }
-    }
-    activeHandle = null
-    return { data: normalizeConfig(cached), mode: 'indexeddb', fileName: handle.name, permission: 'prompt' }
-  }
-  return { data: normalizeConfig(cached), mode: 'indexeddb', fileName: fileMeta?.fileName || '', permission: fileMeta ? 'missing' : 'none' }
-}
-
-export async function connectExistingJson(currentInput) {
-  if (!supportsFileSystemAccess()) throw new Error('此瀏覽器不支援直接連結本機檔案')
-  const [handle] = await window.showOpenFilePicker({
-    multiple: false,
-    types: [{ description: 'myMoney JSON', accept: { 'application/json': ['.json'] } }]
-  })
-  if (!(await getPermission(handle, true))) throw new Error('未取得 data.json 的寫入權限')
-  const data = await readHandle(handle)
-  const fileModified = lastKnownModified
-  const current = toPlainConfig(currentInput)
-  const differs = JSON.stringify(current) !== JSON.stringify(data)
-  if (differs && hasUserData(current)) {
-    activeHandle = null
-    lastKnownModified = null
-    await dbDelete(HANDLE_KEY)
-    pendingConnection = { handle, current, fileData: data, fileModified }
-    await addBackup(current)
-    return {
-      data: current,
-      mode: 'indexeddb',
-      fileName: '',
-      permission: 'none',
-      conflict: {
-        fileName: handle.name,
-        browser: configSummary(current),
-        file: configSummary(data),
-        fileIsEmpty: !hasUserData(data)
-      }
-    }
-  }
-  activeHandle = handle
-  pendingConnection = null
-  await dbSet(HANDLE_KEY, handle)
-  await dbSet(CACHE_KEY, data)
-  await saveFileMeta(handle, data)
-  return { data, mode: 'file', fileName: handle.name, permission: 'granted' }
-}
-
-export async function resolveJsonConnection(strategy) {
-  if (!pendingConnection) throw new Error('沒有等待確認的 data.json 連結')
-  const { handle, current, fileData, fileModified } = pendingConnection
-  activeHandle = handle
-  lastKnownModified = fileModified
-  await dbSet(HANDLE_KEY, handle)
-  let data
-  if (strategy === 'keep-browser') {
-    data = current
-    await writeConnectedFile(data, false)
-  } else if (strategy === 'load-file') {
-    data = fileData
-  } else {
-    throw new Error('未知的 data.json 連結方式')
-  }
-  await dbSet(CACHE_KEY, data)
-  await saveFileMeta(handle, data)
-  pendingConnection = null
-  return { data, mode: 'file', fileName: handle.name, permission: 'granted' }
-}
-
-export function cancelJsonConnection() {
-  pendingConnection = null
-}
-
-export async function createJsonFile(data) {
-  if (!supportsFileSystemAccess()) throw new Error('此瀏覽器不支援直接建立本機檔案')
-  const handle = await window.showSaveFilePicker({
-    suggestedName: `myMoney-data-${fileTimestamp()}.json`,
-    types: [{ description: 'myMoney JSON', accept: { 'application/json': ['.json'] } }]
-  })
-  activeHandle = handle
-  lastKnownModified = null
-  const normalized = toPlainConfig(data)
-  normalized.settings.lastSavedAt = new Date().toISOString()
-  normalized.settings.dataFileCreatedAt = normalized.settings.lastSavedAt
-  await dbSet(HANDLE_KEY, handle)
-  await writeConnectedFile(normalized, false)
-  await dbSet(CACHE_KEY, normalized)
-  await saveFileMeta(handle, normalized, normalized.settings.lastSavedAt)
-  return { data: normalized, mode: 'file', fileName: handle.name, permission: 'granted' }
-}
-
-async function writeConnectedFile(data, detectConflict = true) {
-  if (!activeHandle) return
-  if (!(await getPermission(activeHandle))) {
-    const error = new Error('本機 JSON 權限已失效，請在設定頁重新授權')
-    error.code = 'FILE_PERMISSION_REQUIRED'
-    throw error
-  }
-  const currentFile = await activeHandle.getFile()
-  if (detectConflict && lastKnownModified && currentFile.lastModified !== lastKnownModified) {
-    const error = new Error('data.json 已在程式外被修改，請先重新載入')
-    error.code = 'FILE_CHANGED'
-    throw error
-  }
-  const writable = await activeHandle.createWritable()
-  await writable.write(`${JSON.stringify(data, null, 2)}\n`)
-  await writable.close()
-  lastKnownModified = (await activeHandle.getFile()).lastModified
+  const data = normalizeConfig(cached)
+  // 舊版可能保留檔案控制代碼；新流程不再長期連結檔案，僅保留最近備份資訊。
+  await dbDelete(LEGACY_HANDLE_KEY)
+  return { data, backupStatus: await getBackupStatus(data) }
 }
 
 export async function persistLocalData(input, options = {}) {
-  // IndexedDB 的 structured clone 無法保存 Vue Proxy；先轉成純 JSON 資料。
   const data = toPlainConfig(input)
   const previous = await dbGet(CACHE_KEY)
-  if (activeHandle) {
-    try {
-      await writeConnectedFile(data)
-    } catch (error) {
-      if (error?.code !== 'FILE_PERMISSION_REQUIRED') throw error
-      activeHandle = null
-      lastKnownModified = null
-      if (options.createBackup !== false) await addBackup(previous)
-      await dbSet(CACHE_KEY, data)
-      return { data, fileSyncPaused: true }
-    }
-    try {
-      if (options.createBackup !== false) await addBackup(previous)
-      await dbSet(CACHE_KEY, data)
-      await saveFileMeta(activeHandle, data, data.settings?.lastSavedAt || new Date().toISOString())
-    } catch {
-      // 本機 JSON 已成功寫入時，不因 IndexedDB 備援失敗而回報整次保存失敗。
-    }
-  } else {
-    if (options.createBackup !== false) await addBackup(previous)
-    await dbSet(CACHE_KEY, data)
-  }
-  return { data, fileSyncPaused: false }
-}
-
-export async function reloadConnectedJson(requestPermission = false) {
-  if (!activeHandle) activeHandle = await dbGet(HANDLE_KEY)
-  if (!activeHandle) throw new Error('尚未連結本機 data.json')
-  if (!(await getPermission(activeHandle, requestPermission))) throw new Error('需要重新授權 data.json')
-  const data = await readHandle(activeHandle)
+  if (options.createBackup !== false && summarizeConfigChanges(previous, data).length) await addBackup(previous)
   await dbSet(CACHE_KEY, data)
-  await saveFileMeta(activeHandle, data)
-  return { data, mode: 'file', fileName: activeHandle.name, permission: 'granted' }
+  return { data, backupStatus: await getBackupStatus(data) }
 }
 
-export async function disconnectJson() {
-  activeHandle = null
-  lastKnownModified = null
-  pendingConnection = null
-  await dbDelete(HANDLE_KEY)
-  await dbDelete(FILE_META_KEY)
-}
+export async function saveJsonBackup(input) {
+  const data = toPlainConfig(input)
+  const createdAt = new Date().toISOString()
+  let fileName = backupFileName(new Date(createdAt))
 
-export async function inspectConnectedJson(currentInput, requestPermission = false) {
-  if (!activeHandle) activeHandle = await dbGet(HANDLE_KEY)
-  if (!activeHandle) throw new Error('尚未連結本機 data.json')
-  if (!(await getPermission(activeHandle, requestPermission))) throw new Error('需要重新授權 data.json')
-  const file = await activeHandle.getFile()
-  const fileData = normalizeConfig(JSON.parse(await file.text()))
-  const current = toPlainConfig(currentInput)
-  const handle = activeHandle
-  const matches = JSON.stringify(current) === JSON.stringify(fileData)
-  if (!matches) {
-    pendingConnection = { handle, current, fileData, fileModified: file.lastModified }
-    activeHandle = null
-    lastKnownModified = null
-    await dbDelete(HANDLE_KEY)
-    await addBackup(current)
+  try {
+    if (supportsFileSystemAccess()) {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: fileName,
+        types: [{ description: 'myMoney JSON 備份', accept: { 'application/json': ['.json'] } }]
+      })
+      const writable = await handle.createWritable()
+      await writable.write(`${JSON.stringify(data, null, 2)}\n`)
+      await writable.close()
+      fileName = handle.name
+    } else {
+      const blob = new Blob([`${JSON.stringify(data, null, 2)}\n`], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = fileName
+      link.click()
+      URL.revokeObjectURL(url)
+    }
+  } catch (error) {
+    if (error?.name === 'AbortError') throw error
+    throw new Error(`JSON 備份沒有儲存成功：${error?.message || 'Windows 無法寫入所選位置'}。瀏覽器中的資料仍已正常保存。`)
   }
+
+  return { data, backupStatus: await recordJsonBackup(data, fileName, createdAt) }
+}
+
+export async function inspectJsonImport(file, currentInput) {
+  const data = await parseJsonFile(file)
   return {
-    matches,
-    fileName: handle.name,
-    fileModifiedAt: new Date(file.lastModified).toISOString(),
-    browser: configSummary(current),
-    file: configSummary(fileData),
-    fileIsEmpty: !hasUserData(fileData)
+    fileName: file.name,
+    data,
+    summary: configSummary(data),
+    changes: summarizeConfigChanges(currentInput, data),
+    hasUserData: hasUserData(data)
   }
 }
 
@@ -465,7 +370,7 @@ export async function listLocalBackups() {
   const backups = storedBackups.slice(-BACKUP_LIMIT)
   if (storedBackups.length > BACKUP_LIMIT) await dbSet(BACKUPS_KEY, backups)
   const current = await dbGet(CACHE_KEY)
-  const fileMeta = await dbGet(FILE_META_KEY)
+  const jsonBackup = await dbGet(JSON_BACKUP_DATA_KEY)
   const currentFingerprint = current ? configFingerprint(current) : null
   return backups.map((entry, index) => {
     const summary = configSummary(entry.data)
@@ -477,11 +382,7 @@ export async function listLocalBackups() {
       sizeBytes,
       ...summary,
       matchesCurrent: fingerprint === currentFingerprint,
-      matchesSyncedFile: Boolean(fileMeta?.fingerprint) && fingerprint === fileMeta.fingerprint,
-      syncedFileName: fileMeta?.fileName || '',
-      lastFileSyncedAt: fileMeta?.lastSyncedAt || null,
-      syncedSummary: fileMeta?.summary || null,
-      syncDelta: summaryDelta(summary, fileMeta?.summary),
+      matchesJsonBackup: Boolean(jsonBackup) && summarizeConfigChanges(entry.data, jsonBackup).length === 0,
       changes: nextVersion ? summarizeConfigChanges(entry.data, nextVersion) : []
     }
   }).reverse()
@@ -494,30 +395,15 @@ export async function restoreLocalBackup(createdAt) {
   const current = await dbGet(CACHE_KEY)
   await addBackup(current)
   const data = toPlainConfig(selected.data)
-  if (activeHandle) {
-    await writeConnectedFile(data)
-    await saveFileMeta(activeHandle, data, data.settings?.lastSavedAt || new Date().toISOString())
-  }
   await dbSet(CACHE_KEY, data)
-  return {
-    data,
-    mode: activeHandle ? 'file' : 'indexeddb',
-    fileName: activeHandle?.name || '',
-    permission: activeHandle ? 'granted' : 'none'
-  }
+  return { data, backupStatus: await getBackupStatus(data) }
 }
 
 export async function importJsonFile(file) {
-  const data = normalizeConfig(JSON.parse(await file.text()))
-  return persistLocalData(data)
-}
-
-export function downloadJson(data) {
-  const blob = new Blob([`${JSON.stringify(toPlainConfig(data), null, 2)}\n`], { type: 'application/json' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `myMoney-backup-${new Date().toISOString().slice(0, 10)}.json`
-  link.click()
-  URL.revokeObjectURL(url)
+  const data = await parseJsonFile(file)
+  const current = await dbGet(CACHE_KEY)
+  if (current && summarizeConfigChanges(current, data).length) await addBackup(current)
+  await dbSet(CACHE_KEY, data)
+  const createdAt = file.lastModified ? new Date(file.lastModified).toISOString() : new Date().toISOString()
+  return { data, backupStatus: await recordJsonBackup(data, file.name, createdAt) }
 }

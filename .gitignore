@@ -7,6 +7,7 @@ data/*.xlsx
 data/backups/
 /data.json
 /myMoney-data*.json
+/myMoney-backup-*.json
 .env
 *.log
 .DS_Store

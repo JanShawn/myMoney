@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { summarizeConfigChanges } from '../app/services/local-json-storage'
+import { inspectJsonImport, summarizeConfigChanges } from '../app/services/local-json-storage'
 import { createDefaultConfig } from '../app/services/money-domain'
 
 describe('IndexedDB 備份異動摘要', () => {
@@ -71,5 +71,24 @@ describe('IndexedDB 備份異動摘要', () => {
     expect(summarizeConfigChanges(before, after)).toEqual([
       '週期收支「房租」：金額 18,000 → 20,000 TWD、週期改為每季'
     ])
+  })
+
+  it('復原 JSON 前先解析內容與列出差異，不直接修改目前資料', async () => {
+    const current = createDefaultConfig()
+    const imported = structuredClone(current)
+    imported.items[0].amount = 3500
+    const file = { name: 'myMoney-backup.json', text: async () => JSON.stringify(imported) }
+
+    const preview = await inspectJsonImport(file, current)
+
+    expect(preview.fileName).toBe('myMoney-backup.json')
+    expect(preview.summary.accounts).toBe(1)
+    expect(preview.changes).toEqual(['帳戶「身上現金」：金額 0 → 3,500 TWD'])
+    expect(current.items[0].amount).toBe(0)
+  })
+
+  it('拒絕不是 myMoney 完整備份的 JSON', async () => {
+    const file = { name: 'other.json', text: async () => JSON.stringify({ hello: 'world' }) }
+    await expect(inspectJsonImport(file, createDefaultConfig())).rejects.toThrow('不是 myMoney 完整備份')
   })
 })

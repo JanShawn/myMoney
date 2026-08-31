@@ -2,9 +2,8 @@ import { defineStore } from 'pinia'
 import { toRaw } from 'vue'
 import { calculateRecurringCashflow, calculateSummary, createDefaultConfig, normalizeConfig, SYSTEM_CASH_GROUP_ID, SYSTEM_CASH_ITEM_ID, upsertSnapshot } from '~/services/money-domain'
 import {
-  cancelJsonConnection, connectExistingJson, createJsonFile, disconnectJson, downloadJson, importJsonFile,
-  inspectConnectedJson, listLocalBackups, loadLocalData, persistLocalData, reloadConnectedJson, resolveJsonConnection,
-  restoreLocalBackup, supportsFileSystemAccess
+  importJsonFile, inspectJsonImport, listLocalBackups, loadLocalData, persistLocalData,
+  restoreLocalBackup, saveJsonBackup
 } from '~/services/local-json-storage'
 import { fetchMarketPreview, lookupMarketInstrument } from '~/services/market-service'
 import { fetchTwdExchangeRates } from '~/services/exchange-rate-service'
@@ -15,12 +14,17 @@ export const useMoneyStore = defineStore('money', () => {
   const loading = ref(false)
   const saving = ref(false)
   const error = ref('')
-  const jsonConflict = ref(null)
   const storageStatus = reactive({
-    mode: 'indexeddb',
-    fileName: '',
-    permission: 'none',
-    supportsFileSystemAccess: false
+    lastSavedAt: null,
+    jsonBackup: {
+      exists: false,
+      isCurrent: false,
+      fileName: '',
+      createdAt: null,
+      changes: [],
+      summary: null,
+      comparisonAvailable: false
+    }
   })
 
   const summary = computed(() => calculateSummary(config.value))
@@ -37,17 +41,12 @@ export const useMoneyStore = defineStore('money', () => {
 
   function applyStorageResult(result) {
     config.value = normalizeConfig(result.data)
-    storageStatus.mode = result.mode
-    storageStatus.fileName = result.fileName || ''
-    storageStatus.permission = result.permission || 'none'
+    storageStatus.lastSavedAt = config.value.settings?.lastSavedAt || null
+    if (result.backupStatus) Object.assign(storageStatus.jsonBackup, result.backupStatus)
   }
 
   function applyPersistResult(result) {
-    config.value = result.data
-    if (result.fileSyncPaused) {
-      storageStatus.mode = 'indexeddb'
-      storageStatus.permission = 'prompt'
-    }
+    applyStorageResult(result)
   }
 
   async function run(action) {
@@ -66,7 +65,6 @@ export const useMoneyStore = defineStore('money', () => {
   async function load() {
     loading.value = true
     error.value = ''
-    storageStatus.supportsFileSystemAccess = supportsFileSystemAccess()
     try {
       applyStorageResult(await loadLocalData())
     } catch (loadError) {
@@ -338,66 +336,24 @@ export const useMoneyStore = defineStore('money', () => {
     return snapshot
   })
 
-  const connectJson = () => run(async () => {
-    const result = await connectExistingJson(config.value)
-    jsonConflict.value = result.conflict || null
+  const saveJson = () => run(async () => {
+    const result = await saveJsonBackup(config.value)
     applyStorageResult(result)
-    return result
+    return result.backupStatus
   })
-  const resolveJson = (strategy) => run(async () => {
-    const result = await resolveJsonConnection(strategy)
-    jsonConflict.value = null
-    applyStorageResult(result)
-    return result
-  })
-  const cancelJson = () => {
-    cancelJsonConnection()
-    jsonConflict.value = null
-    if (storageStatus.fileName) {
-      storageStatus.mode = 'indexeddb'
-      storageStatus.permission = 'missing'
-    }
-  }
-  const createJson = () => run(async () => applyStorageResult(await createJsonFile(config.value)))
-  const checkJsonVersion = () => run(async () => {
-    const result = await inspectConnectedJson(config.value, true)
-    storageStatus.fileName = result.fileName
-    if (result.matches) {
-      jsonConflict.value = null
-      storageStatus.mode = 'file'
-      storageStatus.permission = 'granted'
-    } else {
-      jsonConflict.value = {
-        fileName: result.fileName,
-        browser: result.browser,
-        file: result.file,
-        fileIsEmpty: result.fileIsEmpty
-      }
-      storageStatus.mode = 'indexeddb'
-      storageStatus.permission = 'conflict'
-    }
-    return result
-  })
-  const reloadJson = (requestPermission = true) => run(async () => applyStorageResult(await reloadConnectedJson(requestPermission)))
-  const disconnectFile = () => run(async () => {
-    await disconnectJson()
-    storageStatus.mode = 'indexeddb'
-    storageStatus.fileName = ''
-    storageStatus.permission = 'none'
-  })
+  const previewJsonImport = (file) => run(() => inspectJsonImport(file, config.value))
   const importJson = (file) => run(async () => { applyPersistResult(await importJsonFile(file)) })
   const getBackups = () => run(() => listLocalBackups())
   const restoreBackup = (createdAt) => run(async () => applyStorageResult(await restoreLocalBackup(createdAt)))
-  const exportJson = () => downloadJson(config.value)
   const exportExcel = () => run(() => exportSnapshotsToExcel(snapshots.value))
 
   return {
-    config, summary, cashflowPlan, snapshots, loading, saving, error, storageStatus, jsonConflict,
+    config, summary, cashflowPlan, snapshots, loading, saving, error, storageStatus,
     activeItems, activeHoldings, recurringCashflowItems, lastSnapshot,
     load, addGroup, updateGroup, deleteGroup, addItem, updateItem, deleteItem, addHolding, updateHolding, deleteHolding, moveHolding,
     updateSettings, updateCashDraft, addRecurringCashflowItem, updateRecurringCashflowItem, deleteRecurringCashflowItem, swapRecurringCashflowItems,
     lookupHolding, marketPreview, refreshExchangeRates, saveSnapshot, deleteSnapshot,
-    connectJson, resolveJson, cancelJson, createJson, checkJsonVersion, reloadJson, disconnectFile, importJson, exportJson,
+    saveJson, previewJsonImport, importJson,
     getBackups, restoreBackup,
     exportExcel
   }

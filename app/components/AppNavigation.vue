@@ -3,6 +3,13 @@ import { BarChart3, CalendarRange, ClipboardCheck, Landmark, Settings, WalletCar
 import { useMoneyStore } from '~/stores/money'
 
 const store = useMoneyStore()
+const navigationStorage = computed(() => {
+  const backup = store.storageStatus.jsonBackup
+  if (!backup.exists) return { detail: '尚未建立 JSON 備份', state: 'neutral' }
+  if (backup.isCurrent) return { detail: 'JSON 備份已是最新版', state: 'current' }
+  const count = backup.changes?.length || 0
+  return { detail: count ? `${count} 項變更尚未備份` : '有變更尚未備份', state: 'pending' }
+})
 const links = [
   { to: '/', label: '總覽', icon: BarChart3 },
   { to: '/cash', label: '現金驗算', icon: WalletMinimal },
@@ -28,10 +35,10 @@ const links = [
       </NuxtLink>
     </nav>
     <div class="storage-card">
-      <span class="storage-card__dot" :class="{ 'storage-card__dot--file': store.storageStatus.mode === 'file', 'storage-card__dot--paused': store.storageStatus.mode !== 'file' && store.storageStatus.fileName }" />
+      <span class="storage-card__dot" :class="{ 'storage-card__dot--file': navigationStorage.state === 'current', 'storage-card__dot--paused': navigationStorage.state === 'pending' }" />
       <div>
-        <strong>{{ store.storageStatus.mode === 'file' ? '雙重自動保存' : store.storageStatus.fileName ? 'JSON 同步暫停' : 'IndexedDB 自動保存' }}</strong>
-        <small>{{ store.storageStatus.mode === 'file' ? `IndexedDB + ${store.storageStatus.fileName}` : store.storageStatus.fileName ? '目前只更新 IndexedDB' : '尚未連結 data.json' }}</small>
+        <strong>瀏覽器自動保存</strong>
+        <small>{{ navigationStorage.detail }}</small>
       </div>
     </div>
   </aside>

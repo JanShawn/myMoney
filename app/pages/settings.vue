@@ -1,153 +1,95 @@
 <script setup>
-import { Database, Download, FileJson, FileSpreadsheet, History, RefreshCw, RotateCcw, Save, Unplug, Upload } from '@lucide/vue'
+import { AlertCircle, CheckCircle2, ChevronDown, Database, Download, FileJson, FileSpreadsheet, History, RotateCcw, Save, Upload } from '@lucide/vue'
 import { useMoneyStore } from '~/stores/money'
 
 const store = useMoneyStore()
-const status = ref('')
-const versionStatus = ref(null)
 const jsonInput = ref(null)
 const currentOrigin = ref('')
 const backups = ref([])
 const pendingRestoreAt = ref('')
-const pendingStorageAction = ref('')
+const pendingImport = shallowRef(null)
+const feedback = reactive({ message: '', tone: 'info' })
+
+const jsonBackup = computed(() => store.storageStatus.jsonBackup)
+const pendingChanges = computed(() => jsonBackup.value.changes || [])
 const backupTotalBytes = computed(() => backups.value.reduce((total, backup) => total + Number(backup.sizeBytes || 0), 0))
-const storagePresentation = computed(() => {
-  if (store.storageStatus.mode === 'file') return {
-    badge: '雙重保存中',
-    title: `自動同步：${store.storageStatus.fileName}`,
-    description: '每次新增或編輯後，系統會自動更新 IndexedDB 與這個 data.json，不需要另外按同步。'
+const backupPresentation = computed(() => {
+  if (!jsonBackup.value.exists) return {
+    badge: '尚未建立 JSON', tone: 'neutral', title: '瀏覽器資料尚未另外備份',
+    description: '目前資料已自動保存在這個瀏覽器；需要搬移或留存時，再建立一份 JSON。'
   }
-  if (store.storageStatus.fileName) return {
-    badge: 'JSON 已暫停',
-    title: `等待重新連結：${store.storageStatus.fileName}`,
-    description: '目前修改仍會自動保存在 IndexedDB，但 data.json 不會更新；重新選擇同一檔案即可恢復雙重保存。'
+  if (jsonBackup.value.isCurrent) return {
+    badge: 'JSON 已是最新版', tone: 'current', title: '目前資料與最近一次 JSON 備份一致',
+    description: `${jsonBackup.value.fileName} · ${formatDate(jsonBackup.value.createdAt)}`
+  }
+  if (!jsonBackup.value.comparisonAvailable) return {
+    badge: '建議重新備份', tone: 'pending', title: '找到舊版 JSON 紀錄，但無法完整比較內容',
+    description: '重新儲存一次 JSON 後，系統就能準確判斷後續是否有未備份變更。'
   }
   return {
-    badge: '瀏覽器自動保存',
-    title: '資料自動保存在這個瀏覽器',
-    description: '每次新增或編輯後都會自動寫入 IndexedDB，不需要按保存；尚未連結 data.json。'
+    badge: pendingChanges.value.length ? `${pendingChanges.value.length} 項待備份` : '有變更待備份',
+    tone: 'pending', title: '瀏覽器內有尚未備份的變更',
+    description: `最近一次 JSON：${jsonBackup.value.fileName} · ${formatDate(jsonBackup.value.createdAt)}`
   }
-})
-const storageActionGuide = computed(() => {
-  const guides = {
-    connect: {
-      tone: 'info',
-      title: store.storageStatus.fileName ? '重新選擇同步檔案？' : '選擇既有 data.json？',
-      detail: '選擇檔案後會先比較 data.json 與目前 IndexedDB，不會立刻覆蓋任何一邊。',
-      note: '如果內容不同，下一步才會讓你選擇保留瀏覽器資料或載入檔案資料。',
-      confirmLabel: '選擇並比較檔案'
-    },
-    create: {
-      tone: 'info',
-      title: '用目前資料建立 data.json？',
-      detail: '系統會把目前 IndexedDB 的完整資料寫入一個新 JSON，完成後開始雙重自動保存。',
-      note: '之後每次編輯都會自動更新 IndexedDB 與這個新檔案。',
-      confirmLabel: '建立新檔案'
-    },
-    import: {
-      tone: 'danger',
-      title: '匯入 JSON 並取代目前資料？',
-      detail: store.storageStatus.mode === 'file'
-        ? `匯入內容會取代目前 IndexedDB，並同步寫入已連結的 ${store.storageStatus.fileName}。`
-        : '匯入內容會取代目前 IndexedDB 的資料。',
-      note: '取代前的目前資料會先保留在 IndexedDB 近期備份。',
-      confirmLabel: '選擇要匯入的 JSON'
-    },
-    disconnect: {
-      tone: 'warning',
-      title: store.storageStatus.mode === 'file' ? '停止 data.json 自動同步？' : '移除 data.json 連結紀錄？',
-      detail: 'IndexedDB 內的目前資料不會刪除，後續編輯仍會自動保存在這個瀏覽器。',
-      note: 'data.json 將不再更新；之後仍可重新選擇檔案恢復同步。',
-      confirmLabel: store.storageStatus.mode === 'file' ? '停止同步' : '移除連結紀錄'
-    }
-  }
-  return guides[pendingStorageAction.value] || null
 })
 
-async function perform(action, message) {
-  status.value = ''
-  try {
-    const result = await action()
-    status.value = typeof message === 'function' ? message(result) : message
-  } catch {
-    status.value = ''
-  }
+function setFeedback(message = '', tone = 'info') {
+  feedback.message = message
+  feedback.tone = tone
 }
 
 async function loadBackups() {
+  try { backups.value = await store.getBackups() } catch { backups.value = [] }
+}
+
+async function saveJson() {
+  setFeedback()
   try {
-    backups.value = await store.getBackups()
-  } catch {
-    backups.value = []
+    const result = await store.saveJson()
+    setFeedback(`已建立 JSON 備份「${result.fileName}」；目前資料已是最新版。`, 'success')
+  } catch (error) {
+    if (error?.name === 'AbortError') setFeedback('已取消儲存；瀏覽器中的資料仍然安全，不受影響。', 'info')
   }
 }
 
-async function connectJson() {
-  status.value = ''
-  try {
-    const result = await store.connectJson()
-    if (!result.conflict) {
-      status.value = '已載入並連結 data.json；後續修改會同時保存到檔案與瀏覽器。'
-      versionStatus.value = { matches: true, fileName: result.fileName, fileModifiedAt: new Date().toISOString() }
-    } else {
-      versionStatus.value = null
-    }
-    await loadBackups()
-  } catch {
-    status.value = ''
-  }
-}
-async function resolveJson(strategy) {
-  await perform(
-    () => store.resolveJson(strategy),
-    strategy === 'keep-browser' ? '已保留瀏覽器資料，並寫入連結的 data.json。' : '已載入 data.json，原瀏覽器資料仍保留在近期備份。'
-  )
-  if (store.storageStatus.fileName) versionStatus.value = { matches: true, fileName: store.storageStatus.fileName, fileModifiedAt: new Date().toISOString() }
-  await loadBackups()
-}
-function cancelJson() {
-  store.cancelJson()
-  status.value = '已取消連結；瀏覽器資料沒有變更。'
-}
-async function createJson() {
-  await perform(store.createJson, '已建立含時間的 data.json，並開始同步保存到檔案與 IndexedDB。')
-  if (store.storageStatus.fileName) versionStatus.value = { matches: true, fileName: store.storageStatus.fileName, fileModifiedAt: new Date().toISOString() }
-}
-async function checkJsonVersion() {
-  status.value = ''
-  try {
-    const result = await store.checkJsonVersion()
-    versionStatus.value = result.matches ? result : null
-  } catch {
-    versionStatus.value = null
-  }
-}
-const disconnect = async () => {
-  versionStatus.value = null
-  await perform(store.disconnectFile, '已中斷檔案連結；資料仍保存在這個瀏覽器。')
-}
-const exportJson = () => { store.exportJson(); status.value = 'JSON 備份已下載。' }
-const exportExcel = () => perform(store.exportExcel, '盤點歷史 Excel（.xlsx）已下載。')
-
-async function confirmStorageAction() {
-  const action = pendingStorageAction.value
-  pendingStorageAction.value = ''
-  if (action === 'connect') await connectJson()
-  else if (action === 'create') await createJson()
-  else if (action === 'import') jsonInput.value?.click()
-  else if (action === 'disconnect') await disconnect()
-}
-
-async function importJson(event) {
+async function selectJson(event) {
   const file = event.target.files?.[0]
-  if (!file) return
-  await perform(() => store.importJson(file), 'JSON 已匯入目前資料。')
   event.target.value = ''
+  if (!file) return
+  setFeedback()
+  try {
+    const preview = await store.previewJsonImport(file)
+    pendingImport.value = { file, ...preview }
+  } catch { pendingImport.value = null }
 }
+
+async function confirmImport() {
+  if (!pendingImport.value?.file) return
+  const fileName = pendingImport.value.fileName
+  try {
+    await store.importJson(pendingImport.value.file)
+    pendingImport.value = null
+    setFeedback(`已從「${fileName}」復原；原本的瀏覽器資料已保留在近期版本。`, 'success')
+    await loadBackups()
+  } catch { /* 詳細原因由全站錯誤提示呈現。 */ }
+}
+
 async function restoreBackup(createdAt) {
-  await perform(() => store.restoreBackup(createdAt), 'IndexedDB 備份已復原；復原前的目前資料也已另外保留。')
-  pendingRestoreAt.value = ''
-  await loadBackups()
+  setFeedback()
+  try {
+    await store.restoreBackup(createdAt)
+    pendingRestoreAt.value = ''
+    setFeedback('已復原這份瀏覽器版本；復原前的資料也已另外保留。', 'success')
+    await loadBackups()
+  } catch { /* 詳細原因由全站錯誤提示呈現。 */ }
+}
+
+async function exportExcel() {
+  setFeedback()
+  try {
+    await store.exportExcel()
+    setFeedback('盤點歷史 Excel（.xlsx）已下載。', 'success')
+  } catch { /* 詳細原因由全站錯誤提示呈現。 */ }
 }
 
 onMounted(() => {
@@ -155,186 +97,157 @@ onMounted(() => {
   loadBackups()
 })
 
-const formatDate = (value) => value
-  ? new Intl.DateTimeFormat('zh-TW', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
-  : '尚未儲存'
-const formatBytes = (bytes) => {
+function formatDate(value) {
+  return value ? new Intl.DateTimeFormat('zh-TW', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '尚未儲存'
+}
+
+function formatBytes(bytes) {
   if (!bytes) return '0 KB'
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-}
-
-function backupDifferenceText(backup) {
-  if (!backup.syncDelta) return '尚未建立 JSON 同步比較基準。'
-  const labels = { accounts: '帳戶', holdings: '持倉', snapshots: '盤點', recurringCashflowItems: '週期收支' }
-  const differences = Object.entries(backup.syncDelta)
-    .filter(([, value]) => value !== 0)
-    .map(([key, value]) => `${labels[key]} ${value > 0 ? '+' : ''}${value}`)
-  return differences.length ? `相較 JSON 同步版：${differences.join('、')}` : '與 JSON 筆數相同，但內容、金額或價格不同。'
 }
 </script>
 
 <template>
   <div>
-    <PageHeader eyebrow="Local-first storage" title="設定" description="所有編輯都會自動保存；這裡只需要管理 data.json 連結、復原版本與手動匯出。" />
-    <AppNotice v-if="status" tone="success" class="space-after" aria-live="polite">{{ status }}</AppNotice>
+    <PageHeader eyebrow="Local-first storage" title="設定" description="平常操作會自動保存在瀏覽器；需要留存或搬移資料時，再建立一份 JSON 備份。" />
+    <AppNotice v-if="feedback.message" :tone="feedback.tone" class="space-after" aria-live="polite">{{ feedback.message }}</AppNotice>
 
-    <UiPanel title="自動保存" description="IndexedDB 永遠是瀏覽器內的主要資料；連結 data.json 後，系統會在每次編輯時同步更新兩邊。">
-        <template #action><span class="pill" :class="{ 'pill-blue': store.storageStatus.mode === 'file' }">{{ storagePresentation.badge }}</span></template>
-        <div class="stack">
-          <div class="file-status">
-            <div class="file-status__icon"><Database :size="21" aria-hidden="true" /></div>
-            <div class="file-status__copy">
-              <strong>{{ storagePresentation.title }}</strong>
-              <span>{{ storagePresentation.description }}</span>
-            </div>
-          </div>
+    <UiPanel class="storage-panel" title="保存狀態" description="JSON 不再與瀏覽器長期連結，也不會因檔案權限失效而影響平常保存。">
+      <template #action>
+        <span class="pill" :class="{ 'pill-blue': backupPresentation.tone === 'current', 'pill-warning': backupPresentation.tone === 'pending' }">{{ backupPresentation.badge }}</span>
+      </template>
 
-          <AppNotice v-if="store.storageStatus.mode === 'file'" title="不需要手動更新">現在每次修改都會自動更新瀏覽器與 data.json。只有檔案被其他程式改過時，系統才會停止覆寫並請你確認版本。</AppNotice>
-          <AppNotice v-else-if="store.storageStatus.fileName" tone="warning" title="目前只有瀏覽器會更新">data.json 的授權可能在瀏覽器重新啟動後失效；這不是資料遺失，重新選擇同一檔案即可繼續同步。</AppNotice>
-          <AppNotice v-else title="需要跨電腦時再連結 JSON">建立的檔名會包含時間；完成後，後續修改會自動同時保存到該 JSON 與 IndexedDB。</AppNotice>
-
-          <AppNotice v-if="versionStatus" tone="success" title="目前資料與 data.json 一致">
-            {{ versionStatus.fileName }} 已同步；檔案時間 {{ formatDate(versionStatus.fileModifiedAt) }}。
-          </AppNotice>
-
-          <AppNotice v-if="store.jsonConflict" tone="warning" title="data.json 與瀏覽器資料不同，尚未覆蓋">
-            <div class="conflict-comparison">
-              <span><strong>目前瀏覽器</strong>{{ store.jsonConflict.browser.accounts }} 個帳戶、{{ store.jsonConflict.browser.holdings }} 筆持倉、{{ store.jsonConflict.browser.recurringCashflowItems || 0 }} 筆週期收支、{{ store.jsonConflict.browser.snapshots }} 筆盤點</span>
-              <span><strong>{{ store.jsonConflict.fileName }}</strong>{{ store.jsonConflict.file.accounts }} 個帳戶、{{ store.jsonConflict.file.holdings }} 筆持倉、{{ store.jsonConflict.file.recurringCashflowItems || 0 }} 筆週期收支、{{ store.jsonConflict.file.snapshots }} 筆盤點</span>
-            </div>
-            <span>即使筆數相同，金額、股數、價格、名稱、設定或保存時間仍可能不同；請選擇要保留的完整版本。</span>
-            <span v-if="store.jsonConflict.fileIsEmpty">選到的檔案沒有使用者資料，建議保留目前瀏覽器資料。</span>
-            <template #action>
-              <div class="conflict-actions">
-                <button class="btn btn-primary conflict-choice" type="button" :disabled="store.saving" @click="resolveJson('keep-browser')"><strong>保留瀏覽器資料</strong><small>以 IndexedDB 為準，覆蓋 data.json</small></button>
-                <button class="btn btn-secondary conflict-choice" type="button" :disabled="store.saving" @click="resolveJson('load-file')"><strong>載入檔案資料</strong><small>以 data.json 為準，取代目前資料</small></button>
-                <button class="btn btn-ghost" type="button" :disabled="store.saving" @click="cancelJson">取消</button>
-              </div>
-            </template>
-          </AppNotice>
-
-          <template v-if="store.storageStatus.supportsFileSystemAccess">
-            <div v-if="!store.jsonConflict" class="button-grid">
-              <template v-if="store.storageStatus.mode === 'file'">
-                <button class="btn btn-secondary" :disabled="store.saving" @click="checkJsonVersion"><RefreshCw :size="18" />檢查資料版本</button>
-                <button class="btn btn-ghost" :disabled="store.saving" @click="pendingStorageAction = 'disconnect'"><Unplug :size="18" />停止 data.json 同步</button>
-              </template>
-              <template v-else-if="store.storageStatus.fileName">
-                <button class="btn btn-primary" :disabled="store.saving" @click="pendingStorageAction = 'connect'"><RefreshCw :size="18" />重新選擇同步檔案</button>
-                <button class="btn btn-ghost" :disabled="store.saving" @click="pendingStorageAction = 'disconnect'"><Unplug :size="18" />移除連結紀錄</button>
-              </template>
-              <template v-else>
-                <button class="btn btn-primary" :disabled="store.saving" @click="pendingStorageAction = 'connect'"><FileJson :size="18" />選擇既有 data.json</button>
-                <button class="btn btn-secondary" :disabled="store.saving" @click="pendingStorageAction = 'create'"><Save :size="18" />以目前資料建立 data.json</button>
-              </template>
-            </div>
-          </template>
-          <AppNotice v-else tone="warning">這個瀏覽器不支援直接寫回本機檔案，請使用 JSON 匯入／下載；Chrome 或 Edge 桌面版支援最完整。</AppNotice>
-
-          <div class="divider" />
-          <div class="section-copy"><strong>手動 JSON 備份</strong><span>JSON 包含帳戶、持倉、現金明細、設定與全部盤點紀錄，是完整備份格式。</span></div>
-          <input ref="jsonInput" class="sr-only" type="file" accept=".json,application/json" @change="importJson" />
-          <div class="button-grid">
-            <button class="btn btn-secondary" :disabled="store.saving" @click="pendingStorageAction = 'import'"><Upload :size="18" />匯入 JSON 取代目前資料</button>
-            <button class="btn btn-secondary" :disabled="store.saving" title="只下載一次性備份，不會建立自動同步" @click="exportJson"><Download :size="18" />下載一次性 JSON 備份</button>
-          </div>
-
-          <details class="technical-details">
-            <summary>網址與 Port 說明</summary>
-            <div class="storage-origin"><strong>目前 IndexedDB 網址</strong><code>{{ currentOrigin }}</code><span>網址或 Port 改變時，瀏覽器會使用另一份資料庫。</span></div>
-          </details>
+      <div class="storage-status-grid">
+        <div class="storage-status-card storage-status-card--browser">
+          <div class="storage-status-card__icon"><Database :size="21" aria-hidden="true" /></div>
+          <div class="storage-status-card__copy"><strong>瀏覽器已自動保存</strong><span>最後更新：{{ formatDate(store.storageStatus.lastSavedAt) }}</span></div>
+          <CheckCircle2 :size="20" class="storage-status-card__state" aria-label="保存正常" />
         </div>
-    </UiPanel>
 
-    <UiPanel title="IndexedDB 近期備份" description="每次保存前留下上一版，最多保留最新 3 份；可查看異動並復原資料。" class="settings-section">
-      <template #action><div class="backup-panel-action"><History :size="20" aria-hidden="true" /><span class="pill pill-neutral">{{ backups.length }}/3 份 · 約 {{ formatBytes(backupTotalBytes) }}</span></div></template>
-      <AppNotice class="space-after" title="自動保留 3 份，不用手動備份">每份是修改前的完整 JSON；第 4 份出現時會移除最舊的一份。只記錄帳戶、持倉、現金與盤點等實際編輯；自動市場資料、匯率與最新股價不列入，也不會占用備份名額。</AppNotice>
-      <div v-if="backups.length" class="backup-list">
-        <div v-for="backup in backups" :key="backup.createdAt" class="backup-item">
-          <div class="backup-item__copy">
-            <strong>{{ formatDate(backup.createdAt) }}</strong>
-            <span>{{ backup.accounts }} 個帳戶 · {{ backup.holdings }} 筆持倉 · {{ backup.recurringCashflowItems || 0 }} 筆週期收支 · {{ backup.snapshots }} 筆盤點</span>
-            <small>資料最後保存：{{ formatDate(backup.lastSavedAt) }}</small>
-            <div class="backup-version-tags">
-              <span v-if="backup.matchesCurrent" class="pill pill-blue">目前瀏覽器版本</span>
-              <span v-if="backup.matchesSyncedFile" class="pill">JSON 同步版本</span>
-            </div>
-            <details class="backup-changes">
-              <summary>{{ backup.changes.length ? `這份備份後有 ${backup.changes.length} 項異動` : '這份備份後沒有實質資料異動' }}</summary>
-              <ul v-if="backup.changes.length">
-                <li v-for="change in backup.changes" :key="change">{{ change }}</li>
-              </ul>
-              <p v-else>只有保存時間等系統資訊更新，帳戶、金額、持倉與盤點內容沒有改變。</p>
-            </details>
-            <small v-if="backup.syncedFileName && !backup.matchesSyncedFile" class="backup-difference">{{ backupDifferenceText(backup) }}</small>
-            <small v-else-if="!backup.syncedFileName" class="backup-difference">尚未建立 JSON 同步比較基準。</small>
-          </div>
-          <button class="btn btn-secondary" type="button" :disabled="store.saving" @click="pendingRestoreAt = backup.createdAt"><RotateCcw :size="17" />復原這一版</button>
-          <AppNotice v-if="pendingRestoreAt === backup.createdAt" class="backup-confirm" tone="warning" title="確定復原這一版？">
-            {{ store.storageStatus.mode === 'file'
-              ? `IndexedDB 與已連結的 ${store.storageStatus.fileName} 都會切換成這份資料；復原前的目前版本會先保留在近期備份。`
-              : '目前 IndexedDB 會切換成這份資料；復原前的目前版本會先保留在近期備份。' }}
-            <template #action><div class="confirm-actions"><button class="btn btn-ghost" type="button" @click="pendingRestoreAt = ''">取消</button><button class="btn btn-primary" type="button" :disabled="store.saving" @click="restoreBackup(backup.createdAt)">確認復原</button></div></template>
-          </AppNotice>
+        <div class="storage-status-card" :class="`storage-status-card--${backupPresentation.tone}`">
+          <div class="storage-status-card__icon"><FileJson :size="21" aria-hidden="true" /></div>
+          <div class="storage-status-card__copy"><strong>{{ backupPresentation.title }}</strong><span>{{ backupPresentation.description }}</span></div>
+          <AlertCircle v-if="backupPresentation.tone === 'pending'" :size="20" class="storage-status-card__state" aria-label="有資料待備份" />
+          <CheckCircle2 v-else-if="backupPresentation.tone === 'current'" :size="20" class="storage-status-card__state" aria-label="JSON 已是最新版" />
         </div>
       </div>
-      <EmptyState v-else title="目前沒有可復原版本" description="只有在這個瀏覽器曾成功保存過資料，才會出現 IndexedDB 近期備份。" />
+
+      <AppNotice v-if="jsonBackup.exists && !jsonBackup.isCurrent && jsonBackup.comparisonAvailable" tone="warning" :title="`${pendingChanges.length || '有'}項變更尚未備份`">
+        <ul v-if="pendingChanges.length" class="pending-change-list"><li v-for="change in pendingChanges.slice(0, 5)" :key="change">{{ change }}</li></ul>
+        <span v-if="pendingChanges.length > 5">另有 {{ pendingChanges.length - 5 }} 項變更。</span>
+      </AppNotice>
+
+      <div class="backup-actions">
+        <button class="btn btn-primary" type="button" :disabled="store.saving" @click="saveJson"><Save :size="18" />{{ store.saving ? '處理中…' : '儲存 JSON 備份' }}</button>
+        <button class="btn btn-secondary" type="button" :disabled="store.saving" @click="jsonInput?.click()"><Upload :size="18" />從 JSON 復原</button>
+        <input ref="jsonInput" class="sr-only" type="file" accept=".json,application/json" @change="selectJson" />
+      </div>
+      <p class="backup-action-note">儲存時會自動使用日期時間命名；你可以在 Windows 視窗修改名稱，選到同名檔案時由 Windows 詢問是否取代。</p>
+
+      <details class="technical-details">
+        <summary>網址與 Port 說明</summary>
+        <div class="storage-origin"><strong>目前瀏覽器資料位置</strong><code>{{ currentOrigin }}</code><span>網址或 Port 改變時，瀏覽器會使用另一份獨立資料。</span></div>
+      </details>
     </UiPanel>
 
-    <UiPanel title="Excel 匯出（盤點歷史）" description="Excel 只用來下載、查看與分析盤點歷史，不作為資料復原格式；完整備份請使用 JSON。" class="settings-section">
+    <UiPanel title="瀏覽器近期版本" description="每次實際編輯前保留上一版，最多保留最新 3 份。" class="settings-section">
+      <template #action><div class="backup-panel-action"><History :size="20" aria-hidden="true" /><span class="pill pill-neutral">{{ backups.length }}/3 份 · 約 {{ formatBytes(backupTotalBytes) }}</span></div></template>
+      <details class="history-details">
+        <summary class="history-summary"><span>{{ backups.length ? '查看與復原近期版本' : '目前沒有可復原版本' }}</span><ChevronDown :size="18" aria-hidden="true" /></summary>
+        <div v-if="backups.length" class="backup-list">
+          <div v-for="backup in backups" :key="backup.createdAt" class="backup-item">
+            <div class="backup-item__copy">
+              <strong>{{ formatDate(backup.createdAt) }}</strong>
+              <span>{{ backup.accounts }} 個帳戶 · {{ backup.holdings }} 筆持倉 · {{ backup.recurringCashflowItems || 0 }} 筆週期收支 · {{ backup.snapshots }} 筆盤點</span>
+              <small>資料最後保存：{{ formatDate(backup.lastSavedAt) }}</small>
+              <div class="backup-version-tags">
+                <span v-if="backup.matchesCurrent" class="pill pill-blue">目前瀏覽器版本</span>
+                <span v-if="backup.matchesJsonBackup" class="pill">最近 JSON 備份版本</span>
+              </div>
+              <details class="backup-changes">
+                <summary>{{ backup.changes.length ? `這份版本後有 ${backup.changes.length} 項異動` : '這份版本後沒有實質資料異動' }}</summary>
+                <ul v-if="backup.changes.length"><li v-for="change in backup.changes" :key="change">{{ change }}</li></ul>
+                <p v-else>只有保存時間等系統資訊更新，帳戶、金額、持倉與盤點內容沒有改變。</p>
+              </details>
+            </div>
+            <button class="btn btn-secondary" type="button" :disabled="store.saving" @click="pendingRestoreAt = backup.createdAt"><RotateCcw :size="17" />復原這一版</button>
+            <AppNotice v-if="pendingRestoreAt === backup.createdAt" class="backup-confirm" tone="warning" title="確定復原這一版？">
+              目前瀏覽器資料會切換成這份版本；復原前的資料會先保留在近期版本，JSON 檔案不會被修改。
+              <template #action><div class="confirm-actions"><button class="btn btn-ghost" type="button" @click="pendingRestoreAt = ''">取消</button><button class="btn btn-primary" type="button" :disabled="store.saving" @click="restoreBackup(backup.createdAt)">確認復原</button></div></template>
+            </AppNotice>
+          </div>
+        </div>
+        <EmptyState v-else title="目前沒有可復原版本" description="完成一次實際資料編輯後，這裡會自動保留修改前的版本。" />
+      </details>
+    </UiPanel>
+
+    <UiPanel title="其他匯出" description="Excel 只包含資產盤點歷史，完整復原仍請使用 JSON。" class="settings-section">
       <template #action><FileSpreadsheet :size="22" aria-hidden="true" /></template>
-      <button class="btn btn-secondary" :disabled="store.saving || !store.snapshots.length" @click="exportExcel"><Download :size="18" />下載盤點 Excel</button>
+      <button class="btn btn-secondary" type="button" :disabled="store.saving || !store.snapshots.length" @click="exportExcel"><Download :size="18" />下載盤點 Excel</button>
     </UiPanel>
 
-    <ConfirmDialog :open="Boolean(storageActionGuide)" :title="storageActionGuide?.title || ''" :confirm-label="storageActionGuide?.confirmLabel || '繼續'" :tone="storageActionGuide?.tone || 'info'" :busy="store.saving" @close="pendingStorageAction = ''" @confirm="confirmStorageAction">
-      <p>{{ storageActionGuide?.detail }}</p>
-      <p>{{ storageActionGuide?.note }}</p>
+    <ConfirmDialog :open="Boolean(pendingImport)" :title="`從「${pendingImport?.fileName || 'JSON'}」復原？`" confirm-label="確認復原" tone="warning" :busy="store.saving" @close="pendingImport = null" @confirm="confirmImport">
+      <p>檔案內有 {{ pendingImport?.summary?.accounts || 0 }} 個帳戶、{{ pendingImport?.summary?.holdings || 0 }} 筆持倉、{{ pendingImport?.summary?.recurringCashflowItems || 0 }} 筆週期收支、{{ pendingImport?.summary?.snapshots || 0 }} 筆盤點。</p>
+      <p v-if="pendingImport?.changes?.length">與目前瀏覽器資料相比，會產生 {{ pendingImport.changes.length }} 項變更。</p>
+      <p v-else>檔案內容與目前瀏覽器資料沒有實質差異。</p>
+      <AppNotice v-if="pendingImport && !pendingImport.hasUserData" tone="warning" title="這份檔案沒有使用者資料">復原後會只剩下系統預設帳戶，請確認這是你要的版本。</AppNotice>
+      <p>確認前，原本的瀏覽器資料會先保留在近期版本；不會與檔案建立長期連結。</p>
     </ConfirmDialog>
   </div>
 </template>
 
 <style scoped>
 .settings-section { margin-top: 18px; }
-.file-status { display: flex; align-items: center; gap: 13px; padding: 15px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-muted); }
-.file-status__icon { flex: 0 0 auto; width: 42px; height: 42px; display: grid; place-items: center; border-radius: 12px; background: var(--primary-soft); color: var(--primary); }
-.file-status__copy { min-width: 0; }
-.file-status__copy strong, .file-status__copy span { display: block; }
-.file-status__copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.file-status__copy span { margin-top: 4px; color: var(--muted); font-size: .75rem; line-height: 1.45; }
-.storage-origin { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 9px; padding: 9px 11px; border-radius: 10px; background: var(--surface-muted); color: var(--muted); font-size: .72rem; }
-.storage-origin strong { color: var(--text-soft); }
-.storage-origin code { padding: 2px 6px; border-radius: 6px; background: var(--surface); color: var(--primary); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
-.storage-origin span { flex-basis: 100%; }
-.section-copy { display: grid; gap: 4px; }
-.section-copy strong { font-size: .86rem; }
-.section-copy span { color: var(--muted); font-size: .75rem; line-height: 1.5; }
-.button-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.conflict-comparison { display: grid; gap: 7px; margin-bottom: 7px; }
-.conflict-comparison span { display: grid; gap: 1px; }
-.conflict-actions, .confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.conflict-choice { height: auto; display: grid; justify-items: start; gap: 2px; text-align: left; }
-.conflict-choice small { color: inherit; font-size: .67rem; font-weight: 600; opacity: .82; }
-.backup-panel-action { display: flex; align-items: center; justify-content: flex-end; gap: 8px; color: var(--muted); }
-.backup-list { display: grid; gap: 10px; }
+.storage-panel :deep(.panel__header) { flex-wrap: wrap; }
+.storage-panel :deep(.panel__body) { display: grid; gap: 14px; }
+.storage-status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr)); gap: 12px; }
+.storage-status-card { min-height: 104px; display: grid; grid-template-columns: 42px minmax(0, 1fr) 20px; align-items: start; gap: 12px; padding: 15px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-muted); }
+.storage-status-card--browser, .storage-status-card--current { background: linear-gradient(145deg, var(--primary-soft), var(--surface)); border-color: #bcded7; }
+.storage-status-card--pending { background: #fffaf0; border-color: #ead6a8; }
+.storage-status-card__icon { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 12px; background: var(--surface); color: var(--primary); box-shadow: 0 3px 10px rgba(19, 72, 66, .06); }
+.storage-status-card__copy { min-width: 0; }
+.storage-status-card strong, .storage-status-card span { display: block; }
+.storage-status-card strong { font-size: .86rem; line-height: 1.4; }
+.storage-status-card span { margin-top: 5px; overflow-wrap: anywhere; color: var(--muted); font-size: .73rem; line-height: 1.5; }
+.storage-status-card__state { margin-top: 10px; color: var(--primary); }
+.storage-status-card--pending .storage-status-card__state { color: #b7791f; }
+.pill-warning { background: #fff3d9; color: #9a6718; }
+.pending-change-list { display: grid; gap: 4px; margin: 0; padding-left: 18px; overflow-wrap: anywhere; }
+.backup-actions { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr); gap: 10px; }
+.backup-action-note { margin: 0; overflow-wrap: anywhere; color: var(--muted); font-size: .72rem; line-height: 1.5; }
 .technical-details { border-top: 1px solid var(--border); padding-top: 10px; }
 .technical-details summary { width: fit-content; color: var(--muted); cursor: pointer; font-size: .74rem; font-weight: 700; }
 .technical-details[open] summary { margin-bottom: 9px; color: var(--text-soft); }
-.backup-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 13px 14px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-muted); }
+.storage-origin { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 9px; padding: 9px 11px; border-radius: 10px; background: var(--surface-muted); color: var(--muted); font-size: .72rem; }
+.storage-origin strong { color: var(--text-soft); }
+.storage-origin code { max-width: 100%; padding: 2px 6px; overflow-wrap: anywhere; border-radius: 6px; background: var(--surface); color: var(--primary); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; white-space: normal; }
+.storage-origin span { flex-basis: 100%; }
+.backup-panel-action { display: flex; align-items: center; justify-content: flex-end; gap: 8px; color: var(--muted); }
+.history-details { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-muted); }
+.history-summary { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; cursor: pointer; color: var(--text-soft); font-size: .8rem; font-weight: 720; list-style: none; }
+.history-summary span { min-width: 0; overflow-wrap: anywhere; }
+.history-summary::-webkit-details-marker { display: none; }
+.history-summary svg { transition: transform .18s ease; }
+.history-details[open] .history-summary svg { transform: rotate(180deg); }
+.backup-list { display: grid; gap: 10px; padding: 0 12px 12px; }
+.backup-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 13px 14px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); }
 .backup-item__copy { display: grid; gap: 3px; min-width: 0; }
 .backup-item__copy strong { font-size: .86rem; }
 .backup-item__copy span, .backup-item__copy small { color: var(--muted); font-size: .75rem; }
 .backup-version-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 3px; }
 .backup-version-tags .pill { min-height: 22px; padding: 2px 7px; font-size: .64rem; }
-.backup-item__copy .backup-difference { margin-top: 2px; color: var(--text-soft); }
 .backup-changes { margin-top: 4px; color: var(--text-soft); font-size: .75rem; }
 .backup-changes summary { width: fit-content; cursor: pointer; color: var(--primary); font-weight: 700; }
 .backup-changes ul { display: grid; gap: 4px; margin: 7px 0 2px; padding-left: 18px; color: var(--muted); line-height: 1.45; }
 .backup-changes p { margin: 7px 0 2px; color: var(--muted); line-height: 1.45; }
 .backup-confirm { grid-column: 1 / -1; }
+.confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 @media (max-width: 620px) {
-  .button-grid, .backup-item { grid-template-columns: 1fr; }
+  .storage-panel :deep(.panel__action) { width: 100%; justify-content: flex-start; }
+  .backup-actions, .backup-item { grid-template-columns: 1fr; }
+  .backup-actions .btn { width: 100%; }
   .backup-item > .btn { width: 100%; }
-  .conflict-actions, .confirm-actions { flex-direction: column; }
+  .confirm-actions { flex-direction: column; }
 }
 </style>

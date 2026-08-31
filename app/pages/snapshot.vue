@@ -144,11 +144,7 @@ async function save() {
           </div>
           <button class="btn btn-primary btn-block save-snapshot" :disabled="store.saving || !store.activeItems.length" @click="save"><Save :size="18" />{{ store.saving ? '儲存中…' : '確認並儲存快照' }}</button>
           <p class="storage-caption">
-            {{ store.storageStatus.mode === 'file'
-              ? `自動保存至：IndexedDB＋${store.storageStatus.fileName}`
-              : store.storageStatus.fileName
-                ? '自動保存至：IndexedDB（data.json 同步暫停）'
-                : '自動保存至：IndexedDB' }}
+            自動保存至瀏覽器；JSON 備份可在設定頁手動建立。
           </p>
         </UiPanel>
       </aside>
