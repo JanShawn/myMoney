@@ -3,7 +3,7 @@ import { toRaw } from 'vue'
 import { calculateRecurringCashflow, calculateSummary, createDefaultConfig, normalizeConfig, SYSTEM_CASH_GROUP_ID, SYSTEM_CASH_ITEM_ID, upsertSnapshot } from '~/services/money-domain'
 import {
   importJsonFile, inspectJsonImport, listLocalBackups, loadLocalData, persistLocalData,
-  restoreLocalBackup, saveJsonBackup
+  resetLocalData, restoreLocalBackup, saveJsonBackup
 } from '~/services/local-json-storage'
 import { fetchMarketPreview, lookupMarketInstrument } from '~/services/market-service'
 import { fetchTwdExchangeRates } from '~/services/exchange-rate-service'
@@ -345,6 +345,7 @@ export const useMoneyStore = defineStore('money', () => {
   const importJson = (file) => run(async () => { applyPersistResult(await importJsonFile(file)) })
   const getBackups = () => run(() => listLocalBackups())
   const restoreBackup = (createdAt) => run(async () => applyStorageResult(await restoreLocalBackup(createdAt)))
+  const resetAllData = () => run(async () => applyStorageResult(await resetLocalData()))
   const exportExcel = () => run(() => exportSnapshotsToExcel(snapshots.value))
 
   return {
@@ -354,7 +355,7 @@ export const useMoneyStore = defineStore('money', () => {
     updateSettings, updateCashDraft, addRecurringCashflowItem, updateRecurringCashflowItem, deleteRecurringCashflowItem, swapRecurringCashflowItems,
     lookupHolding, marketPreview, refreshExchangeRates, saveSnapshot, deleteSnapshot,
     saveJson, previewJsonImport, importJson,
-    getBackups, restoreBackup,
+    getBackups, restoreBackup, resetAllData,
     exportExcel
   }
 })

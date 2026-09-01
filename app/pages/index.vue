@@ -3,13 +3,12 @@ import { Banknote, Clock3, Eye, EyeOff, Landmark, Save, Trash2, TrendingUp, Wall
 import { useMoneyStore } from '~/stores/money'
 
 const store = useMoneyStore()
+const { showToast } = useToast()
 const money = (value) => new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', maximumFractionDigits: 0 }).format(value || 0)
 const number = (value) => new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 2 }).format(Number(value) || 0)
 const dateTime = (value) => value ? new Intl.DateTimeFormat('zh-TW', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '尚未完成驗算'
 const targetForm = reactive({ cash: 20, stocks: 60, bonds: 20 })
-const targetStatus = ref('')
 const pendingDeleteDate = ref('')
-const snapshotDeleteError = ref('')
 const hideAmounts = ref(false)
 const displayMoney = (value) => hideAmounts.value ? 'NT$ ******' : money(value)
 
@@ -44,19 +43,20 @@ const adjustmentText = (row) => {
   return row.delta > 0 ? `尚可投入${hideAmounts.value ? '' : ` ${money(row.delta)}`}` : `超出目標${hideAmounts.value ? '' : ` ${money(Math.abs(row.delta))}`}`
 }
 async function saveAllocationTargets() {
-  targetStatus.value = ''
   if (Math.abs(targetTotal.value - 100) > 0.001) return
   await store.updateSettings({ allocationTargets: { cash: Number(targetForm.cash), stocks: Number(targetForm.stocks), bonds: Number(targetForm.bonds) } })
-  targetStatus.value = '配置目標已保存。'
+  showToast({ tone: 'success', title: '配置目標已保存', message: '新的現金、股票與債券目標比例已套用。' })
 }
 async function confirmDeleteSnapshot() {
   if (!pendingDeleteRecord.value) return
-  snapshotDeleteError.value = ''
+  const snapshotDate = pendingDeleteRecord.value.date
   try {
-    await store.deleteSnapshot(pendingDeleteRecord.value.date)
+    await store.deleteSnapshot(snapshotDate)
     pendingDeleteDate.value = ''
+    showToast({ tone: 'success', title: '盤點紀錄已刪除', message: `已刪除 ${snapshotDate} 的盤點紀錄。` })
   } catch (error) {
-    snapshotDeleteError.value = error?.message || '盤點紀錄刪除失敗。'
+    store.error = ''
+    showToast({ tone: 'error', title: '盤點紀錄刪除失敗', message: error?.message || '無法刪除這筆盤點紀錄。' })
   }
 }
 const labels = computed(() => chartSnapshots.value.map((item) => item.date.slice(5)))
@@ -144,7 +144,6 @@ const marketData = computed(() => ({
               <div class="field"><label for="target-bonds">債券 %</label><FormattedNumberInput id="target-bonds" v-model="targetForm.bonds" class="input input--amount" :min="0" :max="100" :max-fraction-digits="1" /></div>
             </div>
             <AppNotice v-if="Math.abs(targetTotal - 100) > 0.001" tone="warning" title="目標比例尚未對齊">目前合計 {{ targetTotal.toFixed(1) }}%，請調整為 100%。</AppNotice>
-            <AppNotice v-else-if="targetStatus" tone="success">{{ targetStatus }}</AppNotice>
             <button class="btn btn-secondary btn-block" type="button" :disabled="store.saving || Math.abs(targetTotal - 100) > 0.001" @click="saveAllocationTargets"><Save :size="17" />保存配置目標</button>
           </div>
         </div>
@@ -178,7 +177,7 @@ const marketData = computed(() => ({
           <div class="market-record market-record--header"><span>盤點日期</span><span>淨資產</span><span>加權指數</span><span>240MA</span><span class="market-record__action-label">操作</span></div>
           <div v-for="record in recentMarketRecords" :key="record.date" class="market-record">
             <strong>{{ record.date }}</strong><span>{{ displayMoney(record.netWorth) }}</span><span>{{ number(record.taiex) }}</span><span>{{ number(record.ma240) }}</span>
-            <button class="btn btn-ghost btn-icon market-record__delete" type="button" :aria-label="`刪除 ${record.date} 的盤點紀錄`" @click="pendingDeleteDate = record.date; snapshotDeleteError = ''"><Trash2 :size="16" aria-hidden="true" /></button>
+            <button class="btn btn-ghost btn-icon market-record__delete" type="button" :aria-label="`刪除 ${record.date} 的盤點紀錄`" @click="pendingDeleteDate = record.date"><Trash2 :size="16" aria-hidden="true" /></button>
           </div>
         </div>
         <EmptyState v-else title="還沒有資產與大盤紀錄" description="完成第一筆資產盤點後，淨資產、加權指數與 240MA 會一起顯示在這裡。"><template #action><NuxtLink to="/snapshot" class="btn btn-secondary">前往資產盤點</NuxtLink></template></EmptyState>
@@ -187,7 +186,6 @@ const marketData = computed(() => ({
     <ConfirmDialog :open="Boolean(pendingDeleteRecord)" title="刪除這筆盤點紀錄？" confirm-label="確認刪除" :busy="store.saving" @close="pendingDeleteDate = ''" @confirm="confirmDeleteSnapshot">
       <p><strong>{{ pendingDeleteRecord?.date }} 的資產盤點</strong></p>
       <p>只會刪除這筆歷史快照與當時的大盤紀錄，不會修改目前帳戶、現金明細或投資持倉。</p>
-      <span v-if="snapshotDeleteError" class="inline-delete-error">{{ snapshotDeleteError }}</span>
     </ConfirmDialog>
   </div>
 </template>
@@ -217,7 +215,6 @@ const marketData = computed(() => ({
 .market-record__action-label { text-align: center !important; }
 .market-record__delete { width: 34px; height: 34px; justify-self: end; color: var(--muted); }
 .market-record__delete:hover { background: var(--danger-soft); color: var(--danger); }
-.inline-delete-error { display: block; margin-top: 8px; color: var(--danger); font-size: .76rem; font-weight: 700; }
 @media (max-width: 880px) { .allocation-layout { grid-template-columns: 1fr; } }
 @media (max-width: 620px) {
   .dashboard-actions { width: 100%; }

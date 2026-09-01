@@ -1,4 +1,4 @@
-import { normalizeConfig } from './money-domain'
+import { createDefaultConfig, normalizeConfig } from './money-domain'
 
 const DB_NAME = 'mymoney-local'
 const STORE_NAME = 'key-value'
@@ -396,6 +396,22 @@ export async function restoreLocalBackup(createdAt) {
   await addBackup(current)
   const data = toPlainConfig(selected.data)
   await dbSet(CACHE_KEY, data)
+  return { data, backupStatus: await getBackupStatus(data) }
+}
+
+export function createResetConfig(date = new Date()) {
+  const data = createDefaultConfig()
+  data.settings.lastSavedAt = date.toISOString()
+  return data
+}
+
+export async function resetLocalData() {
+  const current = await dbGet(CACHE_KEY)
+  if (current) await addBackup(current)
+
+  const data = createResetConfig()
+  await dbSet(CACHE_KEY, data)
+
   return { data, backupStatus: await getBackupStatus(data) }
 }
 

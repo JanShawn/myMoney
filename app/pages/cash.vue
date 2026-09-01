@@ -4,8 +4,8 @@ import { useMoneyStore } from '~/stores/money'
 import { SYSTEM_CASH_ITEM_ID } from '~/services/money-domain'
 
 const store = useMoneyStore()
+const { showToast } = useToast()
 const expectedAmount = ref(0)
-const appliedMessage = ref('')
 const createRow = (operation = 'add', amount = '') => ({ id: crypto.randomUUID(), label: '', operation, amount })
 const rows = ref([createRow()])
 const selected = computed(() => store.activeItems.find((item) => item.id === SYSTEM_CASH_ITEM_ID))
@@ -20,8 +20,15 @@ const formatIntegerInput = (value) => value === '' || value == null
 const actualAmount = computed(() => rows.value.reduce((sum, row) => sum + signedAmount(row), 0))
 const difference = computed(() => actualAmount.value - Number(expectedAmount.value || 0))
 const hasDetails = computed(() => rows.value.some((row) => Number(row.amount) > 0))
+const currentAmountChanged = computed(() => Number(expectedAmount.value || 0) !== Number(selected.value?.amount || 0))
 const comparisonState = computed(() => {
-  if (!hasDetails.value) return { tone: 'idle', value: '等待輸入', caption: '加入實際現金明細後會自動比較。' }
+  if (!hasDetails.value) return {
+    tone: 'idle',
+    value: money(expectedAmount.value),
+    caption: currentAmountChanged.value
+      ? '尚未填寫明細，儲存後會直接更新目前現金總額。'
+      : '未使用明細驗算，目前以帳戶保存的現金總額為準。'
+  }
   if (actualAmount.value < 0) return { tone: 'error', value: '明細有誤', caption: '扣除金額不能大於加入金額。' }
   if (difference.value === 0) return { tone: 'success', value: '金額已對齊', caption: '帳面金額與實際明細相同。' }
   if (difference.value > 0) return { tone: 'warning', value: `多 ${money(Math.abs(difference.value))}`, caption: '實際現金高於帳面金額。' }
@@ -71,14 +78,12 @@ function moveRow(index, direction) {
   const [row] = reordered.splice(index, 1)
   reordered.splice(targetIndex, 0, row)
   rows.value = reordered
-  appliedMessage.value = ''
 }
 function updateExpectedAmount(event) {
   const raw = event.target.value
   const sanitized = raw.includes('-') ? '0' : raw.split('.')[0].replace(/\D/g, '')
   expectedAmount.value = Number(sanitized || 0)
   event.target.value = formatIntegerInput(expectedAmount.value)
-  appliedMessage.value = ''
 }
 function updateAdjustment(row, event) {
   const raw = event.target.value
@@ -104,16 +109,31 @@ async function persistDraft(accountId = selectedId.value) {
 async function clearDraft() {
   clearTimeout(draftTimer)
   hydratingDraft.value = true
-  expectedAmount.value = ''
+  expectedAmount.value = Number(selected.value?.amount || 0)
   rows.value = rows.value.map((row) => ({ ...row, amount: '' }))
-  appliedMessage.value = ''
   await nextTick()
   hydratingDraft.value = false
   await persistDraft()
 }
 async function applyResult() {
-  if (!selected.value || !hasDetails.value || actualAmount.value < 0) return
+  if (!selected.value || (hasDetails.value && actualAmount.value < 0)) return
   clearTimeout(draftTimer)
+
+  if (!hasDetails.value) {
+    const previousAmount = Number(selected.value.amount || 0)
+    const nextAmount = Number(expectedAmount.value || 0)
+    if (previousAmount === nextAmount) return
+    await store.updateItem(selected.value.id, {
+      amount: nextAmount,
+      lastReconciledAt: null,
+      lastReconciledAmount: null,
+      lastReconciledDifference: null
+    })
+    await persistDraft()
+    showToast({ tone: 'success', title: '現金總額已更新', message: `已將「${selected.value.name}」更新為 ${money(nextAmount)}；本次未使用明細驗算。` })
+    return
+  }
+
   const previousDifference = difference.value
   const reconciledAt = new Date().toISOString()
   await store.updateItem(selected.value.id, {
@@ -124,9 +144,13 @@ async function applyResult() {
   })
   expectedAmount.value = actualAmount.value
   await persistDraft()
-  appliedMessage.value = previousDifference === 0
-    ? `「${selected.value.name}」原本就與明細合計相同，帳戶金額維持 ${money(actualAmount.value)}。`
-    : `已將「${selected.value.name}」更新為 ${money(actualAmount.value)}，本次調整 ${previousDifference > 0 ? '增加' : '減少'} ${money(Math.abs(previousDifference))}。`
+  showToast({
+    tone: 'success',
+    title: '現金驗算已完成',
+    message: previousDifference === 0
+      ? `「${selected.value.name}」原本就與明細合計相同，帳戶金額維持 ${money(actualAmount.value)}。`
+      : `已將「${selected.value.name}」更新為 ${money(actualAmount.value)}，本次調整 ${previousDifference > 0 ? '增加' : '減少'} ${money(Math.abs(previousDifference))}。`
+  })
 }
 onBeforeUnmount(() => {
   clearTimeout(draftTimer)
@@ -137,10 +161,10 @@ const money = (value) => new Intl.NumberFormat('zh-TW', { style: 'currency', cur
 
 <template>
   <div>
-    <PageHeader eyebrow="Cash reconciliation" title="現金驗算" description="先輸入目前帳面上的現金總額，再用下方實際明細確認金額是否對齊。" />
+    <PageHeader eyebrow="Cash reconciliation" title="現金驗算" description="直接維護目前現金總額；需要核對時再新增實際明細，系統會自動驗算差額。" />
     <div class="page-grid page-grid--sidebar">
-      <UiPanel title="驗算明細" description="項目名稱與加減方式會持續保留；需要重新驗算時只要清除金額。">
-        <template #action><button v-if="selected" class="btn btn-ghost" type="button" :disabled="store.saving" @click="clearDraft"><RotateCcw :size="16" />清除所有金額</button></template>
+      <UiPanel title="現金總額與驗算明細" description="明細為選用；未填明細時，系統會直接使用目前現金總額。">
+        <template #action><button v-if="selected" class="btn btn-ghost" type="button" :disabled="store.saving" @click="clearDraft"><RotateCcw :size="16" />清除明細金額</button></template>
         <div v-if="selected" class="stack">
           <div class="baseline-card">
             <div><span class="baseline-card__eyebrow">對帳基準</span><label for="cash-expected">目前現金總金額</label><small>預設帶入「身上現金」目前的帳面金額，可直接修改。</small></div>
@@ -167,23 +191,22 @@ const money = (value) => new Intl.NumberFormat('zh-TW', { style: 'currency', cur
             <button class="btn btn-secondary" type="button" @click="addRow('add')"><Plus :size="17" />新增加項</button>
             <button class="btn btn-secondary" type="button" @click="addRow('subtract')"><Minus :size="17" />新增減項</button>
           </div>
-          <AppNotice title="明細已自動保存">每列先選「加入」或「扣除」，金額只輸入正整數；離開頁面或套用結果後明細仍會保留。</AppNotice>
+          <AppNotice title="明細是選用功能">沒有填寫明細時，直接儲存目前現金總額；填寫任一明細金額後，系統才會計算合計與驗算差額。</AppNotice>
         </div>
         <EmptyState v-else title="系統現金帳戶尚未載入" description="請重新整理頁面；系統會自動補回受保護的現金群組與帳戶。" />
       </UiPanel>
       <UiPanel as="aside" eyebrow="Reconciled result" title="驗算結果" class="result-panel">
         <div class="reconciled-time"><CalendarCheck :size="18" /><div><span>上次現金驗算</span><strong>{{ lastReconciledText }}</strong></div></div>
         <div class="comparison-summary">
-          <div class="summary-item"><span class="summary-item__label">帳面現金總額</span><strong class="summary-item__value">{{ money(expectedAmount) }}</strong></div>
-          <div class="summary-item"><span class="summary-item__label">實際明細合計</span><strong class="summary-item__value">{{ money(actualAmount) }}</strong></div>
+          <div class="summary-item"><span class="summary-item__label">目前現金總額</span><strong class="summary-item__value">{{ money(expectedAmount) }}</strong></div>
+          <div v-if="hasDetails" class="summary-item"><span class="summary-item__label">實際明細合計</span><strong class="summary-item__value">{{ money(actualAmount) }}</strong></div>
         </div>
         <div class="comparison-result" :class="`comparison-result--${comparisonState.tone}`" role="status" aria-live="polite">
-          <span>驗算差額</span>
+          <span>{{ hasDetails ? '驗算差額' : '目前採用金額' }}</span>
           <strong>{{ comparisonState.value }}</strong>
           <small>{{ comparisonState.caption }}</small>
         </div>
-        <AppNotice v-if="appliedMessage" class="applied-notice" tone="success" title="現金帳戶已更新">{{ appliedMessage }}</AppNotice>
-        <button class="btn btn-primary btn-block apply-button" :disabled="!selected || !hasDetails || actualAmount < 0 || store.saving" @click="applyResult"><Save :size="18" />以明細合計更新現金帳戶</button>
+        <button class="btn btn-primary btn-block apply-button" :disabled="!selected || (hasDetails ? actualAmount < 0 : !currentAmountChanged) || store.saving" @click="applyResult"><Save :size="18" />{{ hasDetails ? '以明細合計更新現金帳戶' : '儲存目前現金總額' }}</button>
       </UiPanel>
     </div>
   </div>
@@ -226,7 +249,6 @@ const money = (value) => new Intl.NumberFormat('zh-TW', { style: 'currency', cur
 .comparison-result--warning > strong { color: var(--warning); }
 .comparison-result--error { border-color: #ecc7c3; background: var(--danger-soft); }
 .comparison-result--error > strong { color: var(--danger); }
-.applied-notice { margin-top: 14px; }
 .apply-button { margin-top: 18px; }
 @media (max-width: 880px) { .result-panel { position: static; } }
 @media (max-width: 620px) {

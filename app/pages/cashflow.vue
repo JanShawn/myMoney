@@ -4,6 +4,7 @@ import { recurringCashflowAnnualAmount, recurringCashflowMonthlyAmount, recurrin
 import { useMoneyStore } from '~/stores/money'
 
 const store = useMoneyStore()
+const { showToast } = useToast()
 const defaultForm = () => ({ name: '', type: 'income', amount: '', frequency: 'monthly', occurrenceMonth: new Date().getMonth() + 1 })
 const form = reactive(defaultForm())
 const formResetKey = ref(0)
@@ -13,7 +14,6 @@ const pendingDeleteId = ref('')
 const sortKey = ref('occurrenceMonth')
 const sortDirection = ref('asc')
 const collapsedGroups = reactive({ income: false, expense: false })
-const feedback = reactive({ tone: '', message: '' })
 
 const frequencyOptions = [
   { value: 'monthly', label: '每月' },
@@ -77,34 +77,33 @@ function startEdit(item) {
   collapsedGroups[item.type] = false
   Object.assign(form, { name: item.name, type: item.type, amount: item.amount, frequency: item.frequency, occurrenceMonth: item.occurrenceMonth || 1 })
   editingId.value = item.id
-  feedback.message = ''
   if (window.matchMedia('(max-width: 880px)').matches) nextTick(() => formPanel.value?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
 }
 
 async function submit() {
-  feedback.message = ''
   const name = form.name.trim()
   const amount = Number(form.amount)
   if (!name) {
-    Object.assign(feedback, { tone: 'error', message: '請填寫週期收支項目名稱，例如「薪資」或「房租」。' })
+    showToast({ tone: 'error', title: '無法儲存週期收支', message: '請填寫項目名稱，例如「薪資」或「房租」。' })
     return
   }
   if (!(amount > 0)) {
-    Object.assign(feedback, { tone: 'error', message: '金額必須大於 0，不能填寫 0 或負數。' })
+    showToast({ tone: 'error', title: '無法儲存週期收支', message: '金額必須大於 0，不能填寫 0 或負數。' })
     return
   }
   try {
     const body = { name, type: form.type, amount, frequency: form.frequency, occurrenceMonth: Number(form.occurrenceMonth) }
     if (editingId.value) {
       await store.updateRecurringCashflowItem(editingId.value, body)
-      Object.assign(feedback, { tone: 'success', message: `已更新「${name}」，資料已自動保存。` })
+      showToast({ tone: 'success', title: '週期收支已更新', message: `已更新「${name}」，資料已自動保存。` })
     } else {
       await store.addRecurringCashflowItem(body)
-      Object.assign(feedback, { tone: 'success', message: `已新增「${name}」，資料已自動保存。` })
+      showToast({ tone: 'success', title: '週期收支已新增', message: `已新增「${name}」，資料已自動保存。` })
     }
     clearForm({ preserveType: true })
   } catch (error) {
-    Object.assign(feedback, { tone: 'error', message: `週期收支項目保存失敗：${error?.message || '無法寫入資料。'}` })
+    store.error = ''
+    showToast({ tone: 'error', title: '週期收支保存失敗', message: error?.message || '無法寫入資料。' })
   }
 }
 
@@ -121,10 +120,11 @@ async function confirmDelete() {
     await store.deleteRecurringCashflowItem(item.id)
     if (editingId.value === item.id) clearForm()
     pendingDeleteId.value = ''
-    Object.assign(feedback, { tone: 'success', message: `已刪除「${item.name}」。` })
+    showToast({ tone: 'success', title: '週期收支已刪除', message: `已刪除「${item.name}」。` })
   } catch (error) {
     pendingDeleteId.value = ''
-    Object.assign(feedback, { tone: 'error', message: `刪除失敗：${error?.message || '無法刪除這筆資料。'}` })
+    store.error = ''
+    showToast({ tone: 'error', title: '刪除失敗', message: error?.message || '無法刪除這筆資料。' })
   }
 }
 
@@ -136,13 +136,13 @@ function moveTarget(items, index, direction) {
 }
 
 async function moveItem(item, direction, items, index) {
-  feedback.message = ''
   const target = moveTarget(items, index, direction)
   if (!target) return
   try {
     await store.swapRecurringCashflowItems(item.id, target.id)
   } catch (error) {
-    Object.assign(feedback, { tone: 'error', message: `排序保存失敗：${error?.message || '無法寫入資料。'}` })
+    store.error = ''
+    showToast({ tone: 'error', title: '排序保存失敗', message: error?.message || '無法寫入資料。' })
   }
 }
 
@@ -176,7 +176,6 @@ watch(sortKey, (value) => {
       <div ref="formPanel" class="cashflow-form-column">
         <UiPanel :title="editingItem ? `編輯「${editingItem.name}」` : '新增週期收支項目'" description="輸入單次發生的金額，系統會依週期自動換算。">
           <form class="stack" @submit.prevent="submit">
-            <AppNotice v-if="feedback.message" :tone="feedback.tone" :title="feedback.tone === 'error' ? '操作沒有完成' : '資料已保存'">{{ feedback.message }}</AppNotice>
 
             <fieldset class="type-choice">
               <legend>收支類型</legend>
@@ -296,6 +295,8 @@ watch(sortKey, (value) => {
 <style scoped>
 .cashflow-metrics { margin-bottom: 18px; }
 .cashflow-metrics :deep(.metric-card), .cashflow-metrics :deep(.metric-card:first-child) { grid-column: span 3; }
+.cashflow-metrics :deep(.metric-card:first-child) { background: var(--surface); color: var(--text); border-color: var(--border); }
+.cashflow-metrics :deep(.metric-card:first-child .metric-label), .cashflow-metrics :deep(.metric-card:first-child .metric-note) { color: var(--muted); }
 .cashflow-workspace { align-items: start; }
 .cashflow-form-column { position: sticky; top: 18px; }
 .cashflow-sort { display: flex; align-items: center; gap: 7px; }
@@ -325,8 +326,7 @@ watch(sortKey, (value) => {
 .cashflow-group__summary svg { color: var(--muted); transition: transform .18s; }
 .cashflow-group__summary .cashflow-group__chevron--open { transform: rotate(180deg); }
 .cashflow-group__icon { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 9px; }
-.cashflow-group__icon--income { background: var(--success-soft); color: var(--success); }
-.cashflow-group__icon--expense { background: var(--danger-soft); color: var(--danger); }
+.cashflow-group__icon--income, .cashflow-group__icon--expense { border: 1px solid var(--border); background: var(--surface); color: var(--text-soft); }
 .cashflow-list { display: grid; }
 .cashflow-row { display: grid; grid-template-columns: minmax(130px, 1.35fr) minmax(96px, .72fr) minmax(105px, .78fr) auto; align-items: center; gap: 12px; min-height: 72px; padding: 12px 20px 12px 24px; border-top: 1px solid var(--border); }
 .cashflow-row__main { min-width: 0; }

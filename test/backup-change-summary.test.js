@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { inspectJsonImport, summarizeConfigChanges } from '../app/services/local-json-storage'
+import { createResetConfig, inspectJsonImport, summarizeConfigChanges } from '../app/services/local-json-storage'
 import { createDefaultConfig } from '../app/services/money-domain'
 
 describe('IndexedDB 備份異動摘要', () => {
@@ -90,5 +90,17 @@ describe('IndexedDB 備份異動摘要', () => {
   it('拒絕不是 myMoney 完整備份的 JSON', async () => {
     const file = { name: 'other.json', text: async () => JSON.stringify({ hello: 'world' }) }
     await expect(inspectJsonImport(file, createDefaultConfig())).rejects.toThrow('不是 myMoney 完整備份')
+  })
+
+  it('建立保留系統預設資料的重設版本', () => {
+    const resetAt = new Date('2026-09-01T08:00:00.000Z')
+    const data = createResetConfig(resetAt)
+
+    expect(data.settings.lastSavedAt).toBe(resetAt.toISOString())
+    expect(data.items).toHaveLength(1)
+    expect(data.items[0]).toMatchObject({ id: 'item-cash', amount: 0, system: true })
+    expect(data.holdings).toEqual([])
+    expect(data.snapshots).toEqual([])
+    expect(data.recurringCashflowItems).toEqual([])
   })
 })

@@ -1,14 +1,15 @@
 <script setup>
-import { AlertCircle, CheckCircle2, ChevronDown, Database, Download, FileJson, FileSpreadsheet, History, RotateCcw, Save, Upload } from '@lucide/vue'
+import { AlertCircle, CheckCircle2, ChevronDown, Database, Download, FileJson, FileSpreadsheet, History, RotateCcw, Save, Trash2, Upload } from '@lucide/vue'
 import { useMoneyStore } from '~/stores/money'
 
 const store = useMoneyStore()
+const { showToast } = useToast()
 const jsonInput = ref(null)
 const currentOrigin = ref('')
 const backups = ref([])
 const pendingRestoreAt = ref('')
+const pendingReset = ref(false)
 const pendingImport = shallowRef(null)
-const feedback = reactive({ message: '', tone: 'info' })
 
 const jsonBackup = computed(() => store.storageStatus.jsonBackup)
 const pendingChanges = computed(() => jsonBackup.value.changes || [])
@@ -33,22 +34,16 @@ const backupPresentation = computed(() => {
   }
 })
 
-function setFeedback(message = '', tone = 'info') {
-  feedback.message = message
-  feedback.tone = tone
-}
-
 async function loadBackups() {
   try { backups.value = await store.getBackups() } catch { backups.value = [] }
 }
 
 async function saveJson() {
-  setFeedback()
   try {
     const result = await store.saveJson()
-    setFeedback(`已建立 JSON 備份「${result.fileName}」；目前資料已是最新版。`, 'success')
+    showToast({ tone: 'success', title: 'JSON 備份完成', message: `已建立「${result.fileName}」；目前資料已是最新版。` })
   } catch (error) {
-    if (error?.name === 'AbortError') setFeedback('已取消儲存；瀏覽器中的資料仍然安全，不受影響。', 'info')
+    if (error?.name === 'AbortError') showToast({ title: '已取消儲存', message: '瀏覽器中的資料仍然安全，不受影響。' })
   }
 }
 
@@ -56,7 +51,6 @@ async function selectJson(event) {
   const file = event.target.files?.[0]
   event.target.value = ''
   if (!file) return
-  setFeedback()
   try {
     const preview = await store.previewJsonImport(file)
     pendingImport.value = { file, ...preview }
@@ -69,26 +63,33 @@ async function confirmImport() {
   try {
     await store.importJson(pendingImport.value.file)
     pendingImport.value = null
-    setFeedback(`已從「${fileName}」復原；原本的瀏覽器資料已保留在近期版本。`, 'success')
+    showToast({ tone: 'success', title: 'JSON 復原完成', message: `已從「${fileName}」復原；原本資料已保留在近期版本。` })
     await loadBackups()
   } catch { /* 詳細原因由全站錯誤提示呈現。 */ }
 }
 
 async function restoreBackup(createdAt) {
-  setFeedback()
   try {
     await store.restoreBackup(createdAt)
     pendingRestoreAt.value = ''
-    setFeedback('已復原這份瀏覽器版本；復原前的資料也已另外保留。', 'success')
+    showToast({ tone: 'success', title: '近期版本復原完成', message: '復原前的資料也已另外保留。' })
+    await loadBackups()
+  } catch { /* 詳細原因由全站錯誤提示呈現。 */ }
+}
+
+async function resetAllData() {
+  try {
+    await store.resetAllData()
+    pendingReset.value = false
+    showToast({ tone: 'success', title: '資料已重設', message: '重設前的內容已保留在近期版本。' })
     await loadBackups()
   } catch { /* 詳細原因由全站錯誤提示呈現。 */ }
 }
 
 async function exportExcel() {
-  setFeedback()
   try {
     await store.exportExcel()
-    setFeedback('盤點歷史 Excel（.xlsx）已下載。', 'success')
+    showToast({ tone: 'success', title: 'Excel 匯出完成', message: '盤點歷史 Excel（.xlsx）已下載。' })
   } catch { /* 詳細原因由全站錯誤提示呈現。 */ }
 }
 
@@ -111,8 +112,6 @@ function formatBytes(bytes) {
 <template>
   <div>
     <PageHeader eyebrow="Local-first storage" title="設定" description="平常操作會自動保存在瀏覽器；需要留存或搬移資料時，再建立一份 JSON 備份。" />
-    <AppNotice v-if="feedback.message" :tone="feedback.tone" class="space-after" aria-live="polite">{{ feedback.message }}</AppNotice>
-
     <UiPanel class="storage-panel" title="保存狀態" description="JSON 不再與瀏覽器長期連結，也不會因檔案權限失效而影響平常保存。">
       <template #action>
         <span class="pill" :class="{ 'pill-blue': backupPresentation.tone === 'current', 'pill-warning': backupPresentation.tone === 'pending' }">{{ backupPresentation.badge }}</span>
@@ -187,6 +186,12 @@ function formatBytes(bytes) {
       <button class="btn btn-secondary" type="button" :disabled="store.saving || !store.snapshots.length" @click="exportExcel"><Download :size="18" />下載盤點 Excel</button>
     </UiPanel>
 
+    <UiPanel title="重設資料" description="清空目前的帳戶、持倉、盤點與週期收支，回到初始狀態。" class="settings-section danger-zone">
+      <template #action><Trash2 :size="22" aria-hidden="true" /></template>
+      <p class="danger-zone__description">重設前會自動保留一份近期版本；既有的 JSON 備份檔案與備份紀錄不會被刪除。</p>
+      <button class="btn btn-danger" type="button" :disabled="store.saving" @click="pendingReset = true"><Trash2 :size="18" />重設所有資料</button>
+    </UiPanel>
+
     <ConfirmDialog :open="Boolean(pendingImport)" :title="`從「${pendingImport?.fileName || 'JSON'}」復原？`" confirm-label="確認復原" tone="warning" :busy="store.saving" @close="pendingImport = null" @confirm="confirmImport">
       <p>檔案內有 {{ pendingImport?.summary?.accounts || 0 }} 個帳戶、{{ pendingImport?.summary?.holdings || 0 }} 筆持倉、{{ pendingImport?.summary?.recurringCashflowItems || 0 }} 筆週期收支、{{ pendingImport?.summary?.snapshots || 0 }} 筆盤點。</p>
       <p v-if="pendingImport?.changes?.length">與目前瀏覽器資料相比，會產生 {{ pendingImport.changes.length }} 項變更。</p>
@@ -194,11 +199,19 @@ function formatBytes(bytes) {
       <AppNotice v-if="pendingImport && !pendingImport.hasUserData" tone="warning" title="這份檔案沒有使用者資料">復原後會只剩下系統預設帳戶，請確認這是你要的版本。</AppNotice>
       <p>確認前，原本的瀏覽器資料會先保留在近期版本；不會與檔案建立長期連結。</p>
     </ConfirmDialog>
+
+    <ConfirmDialog :open="pendingReset" title="確定要重設所有資料？" confirm-label="確認重設" :busy="store.saving" @close="pendingReset = false" @confirm="resetAllData">
+      <p>目前的帳戶、持倉、盤點、現金驗算與週期收支都會清空，系統會回到初始狀態。</p>
+      <p><strong>重設前的內容會先保留在近期版本</strong>，之後仍可從上方的「瀏覽器近期版本」復原。</p>
+    </ConfirmDialog>
   </div>
 </template>
 
 <style scoped>
 .settings-section { margin-top: 18px; }
+.danger-zone { border-color: #edcbc7; }
+.danger-zone :deep(.panel__action) { color: var(--danger); }
+.danger-zone__description { margin: 0 0 12px; color: var(--muted); font-size: .78rem; line-height: 1.55; }
 .storage-panel :deep(.panel__header) { flex-wrap: wrap; }
 .storage-panel :deep(.panel__body) { display: grid; gap: 14px; }
 .storage-status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr)); gap: 12px; }

@@ -3,6 +3,7 @@ import { CheckCircle2, ExternalLink, Pencil, RefreshCw, Search, Trash2 } from '@
 import { useMoneyStore } from '~/stores/money'
 
 const store = useMoneyStore()
+const { showToast } = useToast()
 const defaultForm = () => ({ ticker: '', name: '', market: '', quantity: '', assetClass: 'equity', assetClassDetail: '', direction: 'long', multiplier: 1, price: '', priceSource: 'auto', priceAsOfDate: null, priceSourceLabel: '', yahooUrl: '', liquidity: 'convertible', includeInAssets: true })
 const form = reactive(defaultForm())
 const formResetKey = ref(0)
@@ -12,12 +13,9 @@ const expandedHoldingId = ref('')
 const holdingQuery = ref('')
 const holdingSort = ref('ticker')
 const marketResult = ref(null)
+const marketUpdating = ref(false)
 const manualMode = ref(false)
 const resolvedTicker = ref('')
-const formError = ref('')
-const formSuccess = ref('')
-const holdingEditError = ref('')
-const deleteError = ref('')
 const pendingDeleteHoldingId = ref('')
 const quantityDrafts = reactive({})
 const priceDrafts = reactive({})
@@ -68,13 +66,11 @@ watch(() => form.ticker, () => {
   form.priceSourceLabel = ''
   form.yahooUrl = ''
   manualMode.value = false
-  formError.value = ''
   Object.assign(lookup, { status: 'idle', message: '', source: '', yahooUrl: '' })
 })
 
 function toggleHoldingEdit(holdingId) {
   pendingDeleteHoldingId.value = ''
-  deleteError.value = ''
   expandedHoldingId.value = expandedHoldingId.value === holdingId ? '' : holdingId
 }
 
@@ -85,7 +81,6 @@ function handleHoldingRowClick(holdingId, event) {
 
 async function lookupTicker() {
   const requestId = ++lookupRequestId
-  formError.value = ''
   if (!normalizedTicker.value) {
     Object.assign(lookup, { status: 'error', message: '請先輸入股票或商品代號。', source: '', yahooUrl: '' })
     return false
@@ -126,9 +121,8 @@ async function lookupTicker() {
 }
 
 async function lookupTickerAndFocusQuantity() {
-  formSuccess.value = ''
   if (!normalizedTicker.value) {
-    formError.value = '請輸入股票或商品代號。'
+    showToast({ tone: 'error', title: '無法查詢商品', message: '請輸入股票或商品代號。' })
     return
   }
   const alreadyReady = manualMode.value || (resolvedTicker.value === normalizedTicker.value && instrumentReady.value)
@@ -172,23 +166,20 @@ function resetForm() {
   formResetKey.value += 1
   manualMode.value = false
   resolvedTicker.value = ''
-  formError.value = ''
   Object.assign(lookup, { loading: false, status: 'idle', message: '', source: '', yahooUrl: '' })
 }
 
 async function submit() {
-  formError.value = ''
-  formSuccess.value = ''
   if (!normalizedTicker.value) {
-    formError.value = '請輸入股票或商品代號。'
+    showToast({ tone: 'error', title: '無法新增持倉', message: '請輸入股票或商品代號。' })
     return
   }
   if (!(Number(form.quantity) > 0)) {
-    formError.value = '持有數量必須大於 0。'
+    showToast({ tone: 'error', title: '無法新增持倉', message: '持有數量必須大於 0。' })
     return
   }
   if (form.assetClass === 'other' && !form.assetClassDetail.trim()) {
-    formError.value = '選擇「其他」時，請填寫實際資產類型。'
+    showToast({ tone: 'error', title: '無法新增持倉', message: '選擇「其他」時，請填寫實際資產類型。' })
     return
   }
   if (!manualMode.value && (resolvedTicker.value !== normalizedTicker.value || !instrumentReady.value)) {
@@ -196,18 +187,27 @@ async function submit() {
     if (!found) return
   }
   if (!instrumentReady.value) {
-    formError.value = manualMode.value ? '請填寫商品名稱，且目前價格必須大於 0。' : '尚未取得可用的商品名稱與價格。'
+    showToast({
+      tone: 'error',
+      title: '無法新增持倉',
+      message: manualMode.value ? '請填寫商品名稱，且目前價格必須大於 0。' : '尚未取得可用的商品名稱與價格。'
+    })
     return
   }
   try {
     const addedHolding = { ...form, ticker: normalizedTicker.value, name: form.name.trim(), assetClassDetail: form.assetClass === 'other' ? form.assetClassDetail.trim() : '', quantity: Number(form.quantity), multiplier: Number(form.multiplier), price: Number(form.price) }
     await store.addHolding(addedHolding)
     resetForm()
-    formSuccess.value = `已新增「${addedHolding.ticker} · ${addedHolding.name}」，持有數量 ${addedHolding.quantity.toLocaleString('zh-TW')} 股；新增表單已清空。`
+    showToast({
+      tone: 'success',
+      title: '持倉已新增',
+      message: `已新增「${addedHolding.ticker} · ${addedHolding.name}」，持有數量 ${addedHolding.quantity.toLocaleString('zh-TW')} 股。`
+    })
     await nextTick()
     tickerInput.value?.focus()
   } catch (error) {
-    formError.value = `新增持倉失敗：${error?.message || '無法儲存資料。'}`
+    store.error = ''
+    showToast({ tone: 'error', title: '無法新增持倉', message: error?.message || '無法儲存資料。' })
   }
 }
 async function submitFromNumberInput(event) {
@@ -215,12 +215,41 @@ async function submitFromNumberInput(event) {
   await nextTick()
   await submit()
 }
-async function refreshMarket() { marketResult.value = await store.marketPreview() }
+async function refreshMarket() {
+  marketUpdating.value = true
+  marketResult.value = null
+  try {
+    const result = await store.marketPreview()
+    marketResult.value = result
+    const total = store.activeHoldings.length
+    const updatedCount = store.activeHoldings.filter((holding) => result.prices?.[holding.ticker] != null).length
+    const latestDate = latestClosingDate.value || result.asOfDate
+    const partial = updatedCount < total || Boolean(result.warnings?.length)
+    showToast({
+      tone: partial ? 'warning' : 'success',
+      title: updatedCount
+        ? partial ? '收盤價已部分更新' : '收盤價更新完成'
+        : '沒有可更新的收盤價',
+      message: updatedCount
+        ? `已取得並保存 ${updatedCount}/${total} 筆持倉的收盤價${latestDate ? `，最新收盤日 ${latestDate}` : ''}。`
+        : '這次沒有取得可用的新收盤價，原本價格已保留。',
+      details: result.warnings || []
+    })
+  } catch (error) {
+    store.error = ''
+    showToast({
+      tone: 'error',
+      title: '收盤價更新失敗',
+      message: error?.message || '目前無法取得市場資料，原本價格已保留。'
+    })
+  } finally {
+    marketUpdating.value = false
+  }
+}
 async function saveQuantity(holding, value) {
-  holdingEditError.value = ''
   if (!(Number(value) > 0)) {
     quantityDrafts[holding.id] = holding.quantity
-    holdingEditError.value = `「${holding.name}」的持有數量必須大於 0，這次修改沒有保存。`
+    showToast({ tone: 'error', title: '持倉修改沒有保存', message: `「${holding.name}」的持有數量必須大於 0。` })
     return
   }
   if (Number(value) === Number(holding.quantity)) {
@@ -230,16 +259,17 @@ async function saveQuantity(holding, value) {
   try {
     await store.updateHolding(holding.id, { quantity: Number(value) })
     delete quantityDrafts[holding.id]
+    showToast({ tone: 'success', title: '持有股數已更新', message: `「${holding.name}」的持有數量已保存。`, duration: 3000 })
   } catch (error) {
     delete quantityDrafts[holding.id]
-    holdingEditError.value = `「${holding.name}」的持有數量儲存失敗：${error?.message || '無法寫入資料。'}`
+    store.error = ''
+    showToast({ tone: 'error', title: '持倉修改沒有保存', message: `「${holding.name}」的持有數量：${error?.message || '無法寫入資料。'}` })
   }
 }
 async function savePrice(holding, value) {
-  holdingEditError.value = ''
   if (!(Number(value) > 0)) {
     priceDrafts[holding.id] = holding.price
-    holdingEditError.value = `「${holding.name}」的目前價格必須大於 0，這次修改沒有保存。`
+    showToast({ tone: 'error', title: '持倉修改沒有保存', message: `「${holding.name}」的目前價格必須大於 0。` })
     return
   }
   if (Number(value) === Number(holding.price)) {
@@ -249,23 +279,25 @@ async function savePrice(holding, value) {
   try {
     await store.updateHolding(holding.id, { price: Number(value), priceSource: 'manual' })
     delete priceDrafts[holding.id]
+    showToast({ tone: 'success', title: '持倉價格已更新', message: `「${holding.name}」的目前價格已保存。`, duration: 3000 })
   } catch (error) {
     delete priceDrafts[holding.id]
-    holdingEditError.value = `「${holding.name}」的價格儲存失敗：${error?.message || '無法寫入資料。'}`
+    store.error = ''
+    showToast({ tone: 'error', title: '持倉修改沒有保存', message: `「${holding.name}」的價格：${error?.message || '無法寫入資料。'}` })
   }
 }
 async function requestDeleteHolding(holdingId) {
   expandedHoldingId.value = ''
-  deleteError.value = ''
   pendingDeleteHoldingId.value = holdingId
 }
 async function confirmDeleteHolding(holding) {
-  deleteError.value = ''
   try {
     await store.deleteHolding(holding.id)
     pendingDeleteHoldingId.value = ''
+    showToast({ tone: 'success', title: '持倉已刪除', message: `「${holding.ticker} · ${holding.name}」已永久刪除。` })
   } catch (error) {
-    deleteError.value = `刪除「${holding.name}」失敗：${error?.message || '無法儲存資料。'}`
+    store.error = ''
+    showToast({ tone: 'error', title: '刪除沒有完成', message: `「${holding.name}」：${error?.message || '無法儲存資料。'}` })
   }
 }
 </script>
@@ -273,20 +305,15 @@ async function confirmDeleteHolding(holding) {
 <template>
   <div>
     <PageHeader eyebrow="Investment holdings" title="投資持倉" description="集中管理商品數量與價格；券商帳戶裡尚未投資的現金，請留在帳戶結構。">
-      <template #actions><button class="btn btn-secondary" :disabled="store.saving || !store.activeHoldings.length" @click="refreshMarket"><RefreshCw :size="18" />更新收盤價</button></template>
+      <template #actions><button class="btn btn-secondary" :disabled="marketUpdating || store.saving || !store.activeHoldings.length" @click="refreshMarket"><RefreshCw :class="{ spin: marketUpdating }" :size="18" />{{ marketUpdating ? '更新中…' : '更新收盤價' }}</button></template>
     </PageHeader>
-    <AppNotice v-if="marketResult?.warnings?.length" tone="warning" title="市場資料需要確認" class="space-after">
-      <div v-for="warning in marketResult.warnings" :key="warning">{{ warning }}</div>
-    </AppNotice>
-    <AppNotice v-if="holdingEditError" tone="error" title="持倉修改沒有保存" class="space-after">{{ holdingEditError }}</AppNotice>
     <div class="investment-workspace">
       <UiPanel class="add-holding-panel" title="新增持倉" description="輸入商品代號後，名稱與價格會自動帶入。">
         <form class="create-holding-form" @submit.prevent="submit">
-          <AppNotice v-if="formSuccess" tone="success" title="新增成功" aria-live="polite">{{ formSuccess }}</AppNotice>
           <div class="field">
             <label for="ticker">股票／商品代號</label>
             <div class="lookup-row">
-              <input id="ticker" ref="tickerInput" v-model="form.ticker" class="input" placeholder="例如：0050" autocomplete="off" required @input="formSuccess = ''" @keydown.enter.prevent="lookupTickerAndFocusQuantity" @blur="normalizedTicker && lookup.status === 'idle' && lookupTicker()" />
+              <input id="ticker" ref="tickerInput" v-model="form.ticker" class="input" placeholder="例如：0050" autocomplete="off" required @keydown.enter.prevent="lookupTickerAndFocusQuantity" @blur="normalizedTicker && lookup.status === 'idle' && lookupTicker()" />
               <button class="btn btn-secondary" type="button" :disabled="lookup.loading || !normalizedTicker" @mousedown.prevent @click="lookupTicker">
                 <RefreshCw v-if="lookup.loading" class="spin" :size="17" />
                 <Search v-else :size="17" />
@@ -326,7 +353,6 @@ async function confirmDeleteHolding(holding) {
             </div>
           </div>
 
-          <AppNotice v-if="formError" tone="error" title="無法新增持倉">{{ formError }}</AppNotice>
           <div class="create-form-actions">
             <button v-if="lookup.status === 'idle' && !manualMode" class="btn btn-ghost" type="button" @mousedown.prevent @click="useManualMode">海外或其他商品改用手動輸入</button>
             <button v-if="manualMode" class="btn btn-secondary" type="button" :disabled="lookup.loading || !normalizedTicker" @click="useAutomaticMode"><Search :size="17" />改回自動查詢</button>
@@ -383,7 +409,6 @@ async function confirmDeleteHolding(holding) {
     <ConfirmDialog :open="Boolean(pendingDeleteHolding)" title="刪除這筆持倉？" confirm-label="確認刪除" :busy="store.saving" @close="pendingDeleteHoldingId = ''" @confirm="pendingDeleteHolding && confirmDeleteHolding(pendingDeleteHolding)">
       <p><strong>{{ pendingDeleteHolding?.ticker }} · {{ pendingDeleteHolding?.name }}</strong></p>
       <p>將從目前持倉與資產計算中永久移除；既有歷史盤點不受影響。</p>
-      <span v-if="deleteError" class="inline-delete-error">{{ deleteError }}</span>
     </ConfirmDialog>
   </div>
 </template>
@@ -413,7 +438,7 @@ async function confirmDeleteHolding(holding) {
 .holding-sort button:hover { color: var(--text); }
 .holding-sort button.active { background: var(--surface); color: var(--primary); box-shadow: var(--shadow-xs); }
 .holding-result-count { flex: 0 0 auto; color: var(--muted); font-size: .72rem; font-weight: 700; }
-.holding-card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 10px; padding: 0 12px 12px; }
+.holding-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 10px; padding: 0 12px 12px; }
 .holding-card { display: grid; align-content: start; gap: 11px; min-width: 0; padding: 13px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); cursor: pointer; transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease; }
 .holding-card:hover { border-color: color-mix(in srgb, var(--primary) 28%, var(--border)); box-shadow: var(--shadow-xs); transform: translateY(-1px); }
 .holding-card__header { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 8px; }
@@ -432,7 +457,6 @@ async function confirmDeleteHolding(holding) {
 .holding-summary-values span { color: var(--muted); font-size: .65rem; font-weight: 700; }
 .holding-summary-values strong { max-width: 100%; color: var(--text); font-size: .79rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .quote-action { color: var(--primary); }
-.inline-delete-error { display: block; margin-top: 5px; color: var(--danger); font-weight: 700; }
 .delete-action { color: var(--danger); }
 .confirm-actions { display: flex; gap: 8px; }
 .holding-edit-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: 8px; padding: 10px; border-radius: var(--radius-md); background: var(--surface-muted); }
@@ -454,7 +478,7 @@ async function confirmDeleteHolding(holding) {
 @media (max-width: 1050px) {
   .investment-workspace { grid-template-columns: 1fr; }
   .add-holding-panel { position: static; }
-  .holding-card-grid { grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); }
+  .holding-card-grid { grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); }
 }
 @media (max-width: 620px) {
   .lookup-row { grid-template-columns: 1fr; }

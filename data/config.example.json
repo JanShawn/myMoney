@@ -1,16 +1,16 @@
 {
-  "version": 2,
+  "version": 3,
   "settings": {
     "baseCurrency": "TWD",
     "snapshotDisplayLimit": 30,
     "lastSavedAt": null
   },
   "groups": [
-    { "id": "group-bank", "name": "銀行帳戶", "order": 0, "archived": false },
-    { "id": "group-invest", "name": "投資帳戶", "order": 1, "archived": false },
-    { "id": "group-cash", "name": "現金", "order": 2, "archived": false, "system": true },
-    { "id": "group-other", "name": "其他項目", "order": 3, "archived": false },
-    { "id": "group-debt", "name": "貸款", "order": 4, "archived": false }
+    { "id": "group-cash", "name": "現金", "order": 0, "archived": false, "system": true },
+    { "id": "group-bank", "name": "銀行帳戶", "order": 1, "archived": false },
+    { "id": "group-invest", "name": "投資帳戶", "order": 2, "archived": false },
+    { "id": "group-debt", "name": "貸款", "order": 3, "archived": false },
+    { "id": "group-other", "name": "其他項目", "order": 4, "archived": false }
   ],
   "items": [
     {

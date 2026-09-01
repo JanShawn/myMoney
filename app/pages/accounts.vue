@@ -3,12 +3,11 @@ import { ArrowDown, ArrowUp, Lock, Pencil, Plus, RefreshCw, Trash2 } from '@luci
 import { useMoneyStore } from '~/stores/money'
 
 const store = useMoneyStore()
+const { showToast } = useToast()
 const groupName = ref('')
 const editing = ref(null)
 const defaultForm = () => ({ groupId: '', name: '', behavior: 'manual', assetClass: 'cash', assetClassDetail: '', liquidity: 'available', amount: '', currency: 'TWD', exchangeRate: 1, includeInAssets: true })
 const form = reactive(defaultForm())
-const formError = ref('')
-const deleteError = ref('')
 const pendingDeleteGroupId = ref('')
 const pendingDeleteItemId = ref('')
 const fx = reactive({ loading: false, message: '', error: '' })
@@ -58,6 +57,13 @@ async function applyExchangeRate(target, force = false) {
     if (!(rate > 0)) throw new Error(`匯率資料中沒有 ${target.currency}。`)
     target.exchangeRate = rate
     fx.message = `已使用 ${target.currency} 最新每日參考匯率。`
+    if (force) {
+      showToast({
+        tone: 'success',
+        title: '匯率已更新',
+        message: `1 ${target.currency} = NT$ ${rate.toLocaleString('zh-TW', { maximumFractionDigits: 6 })}。`
+      })
+    }
   } catch (error) {
     const cachedRate = Number(store.config?.market?.fxRates?.[target.currency])
     if (cachedRate > 0) {
@@ -66,6 +72,10 @@ async function applyExchangeRate(target, force = false) {
     } else {
       target.exchangeRate = 0
       fx.error = `無法換算 ${target.currency}：${error?.message || '匯率服務連線失敗'}。請稍後重試。`
+    }
+    if (force) {
+      store.error = ''
+      showToast({ tone: 'warning', title: '匯率更新未完成', message: fx.error })
     }
   } finally {
     fx.loading = false
@@ -105,75 +115,101 @@ watch(() => store.loading, async (loading) => {
 
 async function submitGroup() {
   if (!groupName.value.trim()) return
-  await store.addGroup({ name: groupName.value, order: groups.value.length })
-  groupName.value = ''
+  const name = groupName.value.trim()
+  try {
+    await store.addGroup({ name, order: groups.value.length })
+    groupName.value = ''
+    showToast({ tone: 'success', title: '群組已新增', message: `已建立「${name}」。` })
+  } catch (error) {
+    store.error = ''
+    showToast({ tone: 'error', title: '無法新增群組', message: error?.message || '無法儲存資料。' })
+  }
 }
 async function submitItem() {
-  formError.value = ''
-  if (!form.groupId) { formError.value = '請先建立並選擇一個群組。'; return }
-  if (!form.name.trim()) { formError.value = '請輸入帳戶名稱。'; return }
-  if (Number(form.amount) < 0) { formError.value = '帳戶金額不能小於 0；負債也請輸入正數。'; return }
-  if (form.assetClass === 'other' && !form.assetClassDetail.trim()) { formError.value = '選擇「其他資產」時，請填寫實際項目類型。'; return }
-  if (form.behavior === 'foreign' && !(Number(form.exchangeRate) > 0)) { formError.value = '目前沒有可用匯率，請更新成功後再新增外幣帳戶。'; return }
+  if (!form.groupId) { showToast({ tone: 'error', title: '無法新增帳戶', message: '請先建立並選擇一個群組。' }); return }
+  if (!form.name.trim()) { showToast({ tone: 'error', title: '無法新增帳戶', message: '請輸入帳戶名稱。' }); return }
+  if (Number(form.amount) < 0) { showToast({ tone: 'error', title: '無法新增帳戶', message: '帳戶金額不能小於 0；負債也請輸入正數。' }); return }
+  if (form.assetClass === 'other' && !form.assetClassDetail.trim()) { showToast({ tone: 'error', title: '無法新增帳戶', message: '選擇「其他資產」時，請填寫實際項目類型。' }); return }
+  if (form.behavior === 'foreign' && !(Number(form.exchangeRate) > 0)) { showToast({ tone: 'error', title: '無法新增帳戶', message: '目前沒有可用匯率，請更新成功後再新增外幣帳戶。' }); return }
+  const itemName = form.name.trim()
   try {
-    await store.addItem({ ...form, name: form.name.trim(), assetClassDetail: form.assetClass === 'other' ? form.assetClassDetail.trim() : '', amount: Number(form.amount || 0), exchangeRate: Number(form.exchangeRate) })
+    await store.addItem({ ...form, name: itemName, assetClassDetail: form.assetClass === 'other' ? form.assetClassDetail.trim() : '', amount: Number(form.amount || 0), exchangeRate: Number(form.exchangeRate) })
     Object.assign(form, defaultForm(), { groupId: groups.value[0]?.id || '' })
+    showToast({ tone: 'success', title: '帳戶已新增', message: `已建立「${itemName}」。` })
   } catch (error) {
-    formError.value = `新增帳戶失敗：${error?.message || '無法儲存資料。'}`
+    store.error = ''
+    showToast({ tone: 'error', title: '無法新增帳戶', message: error?.message || '無法儲存資料。' })
   }
 }
 async function renameGroup(group, event) {
   const name = event.target.value.trim()
-  if (name && name !== group.name) await store.updateGroup(group.id, { name })
+  if (!name || name === group.name) return
+  try {
+    await store.updateGroup(group.id, { name })
+    showToast({ tone: 'success', title: '群組名稱已更新', message: `已將「${group.name}」改為「${name}」。`, duration: 3000 })
+  } catch (error) {
+    store.error = ''
+    event.target.value = group.name
+    showToast({ tone: 'error', title: '群組名稱沒有保存', message: error?.message || '無法儲存資料。' })
+  }
 }
 async function moveGroup(group, direction) {
   const index = groups.value.findIndex((entry) => entry.id === group.id)
   const target = groups.value[index + direction]
   if (!target) return
   const originalOrder = group.order
-  await store.updateGroup(group.id, { order: target.order })
-  await store.updateGroup(target.id, { order: originalOrder })
+  try {
+    await store.updateGroup(group.id, { order: target.order })
+    await store.updateGroup(target.id, { order: originalOrder })
+    showToast({ tone: 'success', title: '群組順序已更新', message: `「${group.name}」已${direction < 0 ? '上移' : '下移'}。`, duration: 2500 })
+  } catch (error) {
+    store.error = ''
+    showToast({ tone: 'error', title: '群組順序沒有保存', message: error?.message || '無法儲存資料。' })
+  }
 }
 function editItem(item) {
   editing.value = { ...item }
   if (item.behavior === 'foreign') applyExchangeRate(editing.value)
 }
 async function saveEdit() {
-  formError.value = ''
   if (editing.value.assetClass === 'other' && !String(editing.value.assetClassDetail || '').trim()) {
-    formError.value = '選擇「其他資產」時，請填寫實際項目類型。'
+    showToast({ tone: 'error', title: '無法儲存帳戶', message: '選擇「其他資產」時，請填寫實際項目類型。' })
     return
   }
   if (editing.value.behavior === 'foreign' && !(Number(editing.value.exchangeRate) > 0)) {
-    formError.value = '目前沒有可用匯率，請更新成功後再儲存。'
+    showToast({ tone: 'error', title: '無法儲存帳戶', message: '目前沒有可用匯率，請更新成功後再儲存。' })
     return
   }
   const { id, ...input } = editing.value
   try {
     await store.updateItem(id, { ...input, assetClassDetail: input.assetClass === 'other' ? String(input.assetClassDetail || '').trim() : '', amount: Number(input.amount || 0), exchangeRate: Number(input.exchangeRate || 1) })
     editing.value = null
+    showToast({ tone: 'success', title: '帳戶已更新', message: `「${input.name}」的變更已保存。` })
   } catch (error) {
-    formError.value = `儲存帳戶失敗：${error?.message || '無法儲存資料。'}`
+    store.error = ''
+    showToast({ tone: 'error', title: '無法儲存帳戶', message: error?.message || '無法儲存資料。' })
   }
 }
 async function confirmDeleteGroup(group) {
-  deleteError.value = ''
   try {
     await store.deleteGroup(group.id)
     if (editing.value?.groupId === group.id) editing.value = null
     pendingDeleteGroupId.value = ''
+    showToast({ tone: 'success', title: '群組已刪除', message: `「${group.name}」及群組內項目已永久刪除。` })
   } catch (error) {
-    deleteError.value = `刪除「${group.name}」失敗：${error?.message || '無法儲存資料。'}`
+    store.error = ''
+    showToast({ tone: 'error', title: '刪除沒有完成', message: `「${group.name}」：${error?.message || '無法儲存資料。'}` })
   }
 }
 async function confirmDeleteItem(item) {
-  deleteError.value = ''
   try {
     await store.deleteItem(item.id)
     if (editing.value?.id === item.id) editing.value = null
     pendingDeleteItemId.value = ''
+    showToast({ tone: 'success', title: '帳戶已刪除', message: `「${item.name}」已永久刪除。` })
   } catch (error) {
-    deleteError.value = `刪除「${item.name}」失敗：${error?.message || '無法儲存資料。'}`
+    store.error = ''
+    showToast({ tone: 'error', title: '刪除沒有完成', message: `「${item.name}」：${error?.message || '無法儲存資料。'}` })
   }
 }
 const itemsFor = (groupId) => store.config?.items?.filter((item) => item.groupId === groupId && !item.archived) || []
@@ -183,8 +219,6 @@ const allItemsFor = (groupId) => store.config?.items?.filter((item) => item.grou
 <template>
   <div>
     <PageHeader eyebrow="Account architecture" title="帳戶結構" description="先用群組整理帳戶；台幣、美元與日圓都會統一換算成台幣後統計。" />
-
-    <AppNotice v-if="deleteError" class="space-after" tone="error" title="刪除沒有完成">{{ deleteError }}</AppNotice>
 
     <div class="page-grid page-grid--form-list">
       <div class="stack">
@@ -212,7 +246,6 @@ const allItemsFor = (groupId) => store.config?.items?.filter((item) => item.grou
             </div>
           </template>
           <AppNotice v-if="fx.error && form.behavior === 'foreign'" class="full" tone="warning" title="匯率更新未完成">{{ fx.error }}</AppNotice>
-          <AppNotice v-if="formError && !editing" class="full" tone="error" title="無法新增帳戶">{{ formError }}</AppNotice>
           <label class="checkbox full"><input v-model="form.includeInAssets" type="checkbox" :disabled="form.behavior === 'liability'" /><span>納入總資產計算；負債會獨立計算並從淨資產扣除。</span></label>
           <div class="form-actions full"><button class="btn btn-primary" :disabled="store.saving || !groups.length"><Plus :size="18" />新增項目</button></div>
           <p class="fx-attribution full">每日參考匯率由 <a href="https://www.exchangerate-api.com" target="_blank" rel="noreferrer">ExchangeRate-API</a> 提供；不是銀行實際成交價。</p>
@@ -239,7 +272,6 @@ const allItemsFor = (groupId) => store.config?.items?.filter((item) => item.grou
               </div>
             </template>
             <AppNotice v-if="fx.error && editing.behavior === 'foreign'" class="full" tone="warning" title="匯率更新未完成">{{ fx.error }}</AppNotice>
-            <AppNotice v-if="formError" class="full" tone="error" title="無法儲存帳戶">{{ formError }}</AppNotice>
             <AppNotice v-if="editing.system" class="full" title="系統連動帳戶">這個帳戶固定提供給現金驗算；可以調整名稱與金額，但不能移動、改變類型或刪除。</AppNotice>
             <label class="checkbox full"><input v-model="editing.includeInAssets" type="checkbox" :disabled="editing.system" /><span>納入總資產計算</span></label>
             <div class="form-actions full"><button class="btn btn-primary" :disabled="store.saving">儲存項目變更</button></div>

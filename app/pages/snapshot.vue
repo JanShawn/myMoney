@@ -3,9 +3,10 @@ import { RefreshCw, Save } from '@lucide/vue'
 import { useMoneyStore } from '~/stores/money'
 
 const store = useMoneyStore()
+const { showToast } = useToast()
 const note = ref('')
-const saved = ref(false)
 const marketResult = ref(null)
+const marketUpdating = ref(false)
 const fxError = ref('')
 const today = () => {
   const now = new Date()
@@ -34,44 +35,63 @@ async function refreshFx(force = false) {
     await store.refreshExchangeRates(force)
   } catch (error) {
     fxError.value = `外幣匯率更新失敗：${error?.message || '網路連線失敗'}。目前保留上次成功匯率。`
+    if (force) store.error = ''
   }
 }
 
 watch(() => store.loading, (loading) => { if (!loading) refreshFx() }, { immediate: true })
 
 async function refreshMarket() {
-  marketResult.value = await store.marketPreview()
-  if (marketResult.value.taiex) taiex.value = marketResult.value.taiex
-  if (marketResult.value.ma240) ma240.value = marketResult.value.ma240
-  await refreshFx(true)
+  marketUpdating.value = true
+  fxError.value = ''
+  try {
+    marketResult.value = await store.marketPreview()
+    if (marketResult.value.taiex) taiex.value = marketResult.value.taiex
+    if (marketResult.value.ma240) ma240.value = marketResult.value.ma240
+    await refreshFx(true)
+    const details = [...(marketResult.value.warnings || []), fxError.value].filter(Boolean)
+    showToast({
+      tone: details.length ? 'warning' : 'success',
+      title: details.length ? '市場資料已部分更新' : '市場資料更新完成',
+      message: `資料日 ${marketResult.value.asOfDate || '未提供'}；加權指數 ${number(marketResult.value.taiex)}、240MA ${number(marketResult.value.ma240)}。`,
+      details
+    })
+  } catch {
+    // Store 會交由全站 toast 顯示具體錯誤。
+  } finally {
+    marketUpdating.value = false
+  }
 }
 
 async function save() {
-  saved.value = false
   if (!Number(taiex.value) || !Number(ma240.value)) {
     store.error = '儲存前請填入加權指數與 240MA。'
     return
   }
   const summary = store.summary
-  await store.saveSnapshot({
-    date: date.value,
-    verifiedAt: new Date().toISOString(),
-    ...summary,
-    taiex: Number(taiex.value),
-    ma240: Number(ma240.value),
-    note: note.value
-  })
-  saved.value = true
+  try {
+    await store.saveSnapshot({
+      date: date.value,
+      verifiedAt: new Date().toISOString(),
+      ...summary,
+      taiex: Number(taiex.value),
+      ma240: Number(ma240.value),
+      note: note.value
+    })
+    showToast({
+      tone: 'success',
+      title: `已完成 ${date.value} 的盤點`,
+      message: '同一天再次儲存會更新原本的快照，不會新增重複資料。'
+    })
+  } catch {
+    // Store 會交由全站 toast 顯示具體錯誤。
+  }
 }
 </script>
 
 <template>
   <div>
     <PageHeader eyebrow="Daily check-in" title="資產盤點" description="自動彙整帳戶與投資持倉，確認市場基準後留下當天的完整快照。" />
-
-    <div class="stack page-messages">
-      <AppNotice v-if="saved" tone="success" :title="`已完成 ${date} 的盤點`" aria-live="polite">同一天再次儲存會更新原本的快照，不會新增重複資料。</AppNotice>
-    </div>
 
     <div class="page-grid page-grid--sidebar">
       <section class="stack">
@@ -89,25 +109,21 @@ async function save() {
         <UiPanel v-if="!store.activeItems.length && !store.loading"><EmptyState title="還沒有可盤點的帳戶" description="先建立帳戶項目，再回來保存第一份快照。"><template #action><NuxtLink to="/accounts" class="btn btn-secondary">前往帳戶結構</NuxtLink></template></EmptyState></UiPanel>
       </section>
       <aside class="stack snapshot-sidebar">
-        <UiPanel title="市場與備註" description="可自動帶入，亦可手動修正。">
-          <template #action><button class="btn btn-secondary market-header-button" type="button" aria-label="取得市場資料" :disabled="store.saving" @click="refreshMarket"><RefreshCw :size="17" />取得資料</button></template>
-          <div class="stack market-messages">
-            <AppNotice v-if="marketResult?.warnings?.length" tone="warning" title="有些資料需要你確認">
-              <div v-for="warning in marketResult.warnings" :key="warning">{{ warning }}</div>
-            </AppNotice>
-            <AppNotice v-else-if="marketResult" tone="success" title="市場資料已自動更新">
-              加權指數 {{ number(marketResult.taiex) }}、240MA {{ number(marketResult.ma240) }}；資料日 {{ marketResult.asOfDate }}，來源：{{ marketResult.source }}。
-            </AppNotice>
-            <AppNotice v-if="fxError" tone="warning" title="外幣仍使用上次匯率">{{ fxError }}</AppNotice>
-          </div>
-          <div class="form-grid">
-            <div class="field"><label for="snapshot-date">盤點日期</label><input id="snapshot-date" v-model="date" class="input" type="date" /></div>
-            <div class="field"><label for="taiex">加權指數</label><FormattedNumberInput id="taiex" v-model="taiex" class="input input--amount" :min="0" :max-fraction-digits="2" required /></div>
-            <div class="field full"><label for="ma240">240MA</label><FormattedNumberInput id="ma240" v-model="ma240" class="input input--amount" :min="0" :max-fraction-digits="2" required /></div>
-            <div class="field full"><label for="note">備註</label><textarea id="note" v-model="note" class="textarea" maxlength="500" placeholder="例如：調整配置、現金支出較多" /></div>
-          </div>
-        </UiPanel>
-        <UiPanel eyebrow="Snapshot preview" title="這次會保存的重點">
+        <UiPanel eyebrow="Snapshot preview" title="這次會保存的重點" description="確認盤點資訊、資產摘要與備註後，一次保存完整快照。">
+          <section class="snapshot-section" aria-labelledby="snapshot-market-title">
+            <div class="snapshot-section__heading">
+              <div><h3 id="snapshot-market-title">市場與備註</h3><p>可自動帶入，亦可在保存前手動修正。</p></div>
+              <button class="btn btn-secondary market-header-button" type="button" :disabled="marketUpdating || store.saving" @click="refreshMarket"><RefreshCw :class="{ spin: marketUpdating }" :size="17" />{{ marketUpdating ? '取得中…' : '取得資料' }}</button>
+            </div>
+            <div class="form-grid snapshot-form">
+              <div class="field"><label for="snapshot-date">盤點日期</label><input id="snapshot-date" v-model="date" class="input" type="date" /></div>
+              <div class="field"><label for="taiex">加權指數</label><FormattedNumberInput id="taiex" v-model="taiex" class="input input--amount" :min="0" :max-fraction-digits="2" required /></div>
+              <div class="field full"><label for="ma240">240MA</label><FormattedNumberInput id="ma240" v-model="ma240" class="input input--amount" :min="0" :max-fraction-digits="2" required /></div>
+              <div class="field full"><label for="note">備註</label><textarea id="note" v-model="note" class="textarea" maxlength="500" placeholder="例如：調整配置、現金支出較多" /></div>
+            </div>
+          </section>
+          <section class="snapshot-section snapshot-section--summary" aria-labelledby="snapshot-summary-title">
+            <div class="snapshot-section__heading"><div><h3 id="snapshot-summary-title">資產摘要</h3><p>以下數字與市場資料會一起寫入本次快照。</p></div></div>
           <div class="asset-composition" aria-label="總資產組成">
             <div class="asset-composition__heading">
               <strong>總資產組成</strong>
@@ -142,6 +158,7 @@ async function save() {
             <div class="summary-item"><span class="summary-item__label">總負債</span><strong class="summary-item__value negative">{{ money(store.summary?.totalLiabilities) }}</strong></div>
             <div class="summary-item summary-item--primary"><span class="summary-item__label">淨資產</span><strong class="summary-item__value">{{ money(store.summary?.netWorth) }}</strong></div>
           </div>
+          </section>
           <button class="btn btn-primary btn-block save-snapshot" :disabled="store.saving || !store.activeItems.length" @click="save"><Save :size="18" />{{ store.saving ? '儲存中…' : '確認並儲存快照' }}</button>
           <p class="storage-caption">
             自動保存至瀏覽器；JSON 備份可在設定頁手動建立。
@@ -153,15 +170,19 @@ async function save() {
 </template>
 
 <style scoped>
-.page-messages { margin-bottom: 18px; }
 .snapshot-group-panel :deep(.panel__header) { padding-bottom: 14px; }
 .snapshot-row { grid-template-columns: minmax(0, 1.35fr) minmax(120px, .65fr) minmax(150px, .75fr); }
 .rate-readout { min-height: 40px; display: flex; align-items: center; justify-content: flex-end; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-muted); color: var(--text-soft); font-size: .78rem; font-variant-numeric: tabular-nums; }
 .amount-readout { min-height: 40px; display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-muted); color: var(--text); font-size: .88rem; font-weight: 750; font-variant-numeric: tabular-nums; }
 .amount-readout small { color: var(--muted); font-size: .68rem; font-weight: 650; }
 .market-header-button { min-height: 38px; padding: 7px 11px; white-space: nowrap; }
-.market-messages:not(:empty) { margin-bottom: 16px; }
 .snapshot-sidebar { position: sticky; top: 24px; }
+.snapshot-section { display: grid; gap: 14px; }
+.snapshot-section--summary { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--border); }
+.snapshot-section__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.snapshot-section__heading h3 { margin: 0; font-size: .9rem; }
+.snapshot-section__heading p { margin: 4px 0 0; color: var(--muted); font-size: .72rem; line-height: 1.45; }
+.snapshot-form { gap: 12px; }
 .asset-composition { overflow: hidden; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-muted); }
 .asset-composition__heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 7px; }
 .asset-composition__heading strong { font-size: .85rem; }
@@ -175,5 +196,11 @@ async function save() {
 .snapshot-net-summary { margin-top: 10px; }
 .save-snapshot { margin-top: 20px; }
 .storage-caption { margin: 10px 0 0; color: var(--muted); text-align: center; font-size: .72rem; line-height: 1.5; }
+.spin { animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 880px) { .snapshot-sidebar { position: static; } }
+@media (max-width: 620px) {
+  .snapshot-section__heading { align-items: stretch; flex-direction: column; }
+  .market-header-button { width: 100%; }
+}
 </style>

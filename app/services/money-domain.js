@@ -1,7 +1,30 @@
 export const SYSTEM_CASH_GROUP_ID = 'group-cash'
 export const SYSTEM_CASH_ITEM_ID = 'item-cash'
 
-const createSystemCashGroup = (order = 2) => ({ id: SYSTEM_CASH_GROUP_ID, name: '現金', order, archived: false, system: true })
+const CONFIG_VERSION = 3
+const DEFAULT_GROUP_ORDERS = {
+  [SYSTEM_CASH_GROUP_ID]: 0,
+  'group-bank': 1,
+  'group-invest': 2,
+  'group-debt': 3,
+  'group-other': 4
+}
+const LEGACY_DEFAULT_GROUP_ORDERS = {
+  'group-bank': 0,
+  'group-invest': 1,
+  [SYSTEM_CASH_GROUP_ID]: 2,
+  'group-other': 3,
+  'group-debt': 4
+}
+const LEGACY_DEFAULT_GROUP_ORDERS_WITHOUT_CASH = {
+  'group-bank': 0,
+  'group-invest': 1,
+  'group-other': 2,
+  'group-debt': 3
+}
+const matchesGroupOrder = (groups, orders) => Object.entries(orders)
+  .every(([id, order]) => groups.some((group) => group.id === id && Number(group.order) === order))
+const createSystemCashGroup = (order = DEFAULT_GROUP_ORDERS[SYSTEM_CASH_GROUP_ID]) => ({ id: SYSTEM_CASH_GROUP_ID, name: '現金', order, archived: false, system: true })
 const createSystemCashItem = () => ({
   id: SYSTEM_CASH_ITEM_ID, groupId: SYSTEM_CASH_GROUP_ID, name: '身上現金', behavior: 'cash',
   assetClass: 'cash', liquidity: 'available', includeInAssets: true,
@@ -10,7 +33,7 @@ const createSystemCashItem = () => ({
 
 export function createDefaultConfig() {
   return {
-    version: 2,
+    version: CONFIG_VERSION,
     settings: {
       baseCurrency: 'TWD',
       snapshotDisplayLimit: 30,
@@ -18,11 +41,11 @@ export function createDefaultConfig() {
       lastSavedAt: null
     },
     groups: [
-      { id: 'group-bank', name: '銀行帳戶', order: 0, archived: false },
-      { id: 'group-invest', name: '投資帳戶', order: 1, archived: false },
       createSystemCashGroup(),
-      { id: 'group-other', name: '其他項目', order: 3, archived: false },
-      { id: 'group-debt', name: '貸款', order: 4, archived: false }
+      { id: 'group-bank', name: '銀行帳戶', order: DEFAULT_GROUP_ORDERS['group-bank'], archived: false },
+      { id: 'group-invest', name: '投資帳戶', order: DEFAULT_GROUP_ORDERS['group-invest'], archived: false },
+      { id: 'group-debt', name: '貸款', order: DEFAULT_GROUP_ORDERS['group-debt'], archived: false },
+      { id: 'group-other', name: '其他項目', order: DEFAULT_GROUP_ORDERS['group-other'], archived: false }
     ],
     items: [createSystemCashItem()],
     cashDrafts: {},
@@ -41,14 +64,22 @@ export function normalizeConfig(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return defaults
   const groups = (Array.isArray(input.groups) ? input.groups : defaults.groups).map((group) => ({ ...group }))
   let cashGroup = groups.find((group) => group.id === SYSTEM_CASH_GROUP_ID)
+  const usesLegacyDefaultOrder = Number(input.version || 0) < CONFIG_VERSION
+    && (matchesGroupOrder(groups, LEGACY_DEFAULT_GROUP_ORDERS)
+      || matchesGroupOrder(groups, LEGACY_DEFAULT_GROUP_ORDERS_WITHOUT_CASH))
   if (!cashGroup) {
     for (const group of groups) {
-      if (Number(group.order) >= 2) group.order = Number(group.order) + 1
+      group.order = Number(group.order) + 1
     }
     cashGroup = createSystemCashGroup()
     groups.push(cashGroup)
   } else {
     Object.assign(cashGroup, { name: '現金', archived: false, system: true })
+  }
+  if (usesLegacyDefaultOrder) {
+    for (const group of groups) {
+      if (DEFAULT_GROUP_ORDERS[group.id] != null) group.order = DEFAULT_GROUP_ORDERS[group.id]
+    }
   }
 
   const items = (Array.isArray(input.items) ? input.items : defaults.items).map((item) => ({
@@ -78,7 +109,7 @@ export function normalizeConfig(input) {
   return {
     ...defaults,
     ...input,
-    version: 2,
+    version: CONFIG_VERSION,
     settings: {
       ...defaults.settings,
       ...(input.settings || {}),
