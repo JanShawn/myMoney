@@ -4,9 +4,8 @@ import { useMoneyStore } from '~/stores/money'
 
 const store = useMoneyStore()
 const { showToast } = useToast()
-const defaultForm = () => ({ ticker: '', name: '', market: '', quantity: '', assetClass: 'equity', assetClassDetail: '', direction: 'long', multiplier: 1, price: '', priceSource: 'auto', priceAsOfDate: null, priceSourceLabel: '', yahooUrl: '', liquidity: 'convertible', includeInAssets: true })
+const defaultForm = () => ({ ticker: '', name: '', market: '', quantity: '', assetClass: 'equity', leverage: 1, price: '', priceSource: 'auto', priceAsOfDate: null, priceSourceLabel: '', yahooUrl: '', liquidity: 'convertible' })
 const form = reactive(defaultForm())
-const formResetKey = ref(0)
 const tickerInput = ref(null)
 const quantityInput = ref(null)
 const expandedHoldingId = ref('')
@@ -14,17 +13,15 @@ const holdingQuery = ref('')
 const holdingSort = ref('ticker')
 const marketResult = ref(null)
 const marketUpdating = ref(false)
-const manualMode = ref(false)
 const resolvedTicker = ref('')
 const pendingDeleteHoldingId = ref('')
 const quantityDrafts = reactive({})
 const priceDrafts = reactive({})
+const leverageDrafts = reactive({})
 const lookup = reactive({ loading: false, status: 'idle', message: '', source: '', yahooUrl: '' })
 let lookupRequestId = 0
-const classLabels = { equity: '股票', bond: '債券', other: '其他' }
-const directionLabels = { long: '一般／做多', inverse: '反向商品' }
+const classLabels = { equity: '股票', bond: '債券' }
 const classOptions = Object.entries(classLabels).map(([value, label]) => ({ value, label }))
-const directionOptions = Object.entries(directionLabels).map(([value, label]) => ({ value, label }))
 const money = (value) => new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', maximumFractionDigits: 0 }).format(value || 0)
 const priceMoney = (value) => new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value || 0)
 const quantityText = (value) => new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 8 }).format(Number(value || 0))
@@ -32,11 +29,14 @@ const normalizedTicker = computed(() => String(form.ticker || '').trim().toUpper
 const instrumentReady = computed(() => Boolean(form.name.trim()) && Number(form.price) > 0)
 const displayQuantity = (holding) => quantityDrafts[holding.id] ?? holding.quantity
 const displayPrice = (holding) => priceDrafts[holding.id] ?? holding.price
-const holdingMarketValue = computed(() => store.activeHoldings.reduce((sum, holding) => sum + Number(displayQuantity(holding) || 0) * Number(displayPrice(holding) || 0) * Number(holding.multiplier || 1), 0))
+const displayLeverage = (holding) => leverageDrafts[holding.id] ?? holding.leverage ?? 1
+const holdingValue = (holding) => Number(displayQuantity(holding) || 0) * Number(displayPrice(holding) || 0)
+const holdingExposureValue = (holding) => holdingValue(holding) * Number(displayLeverage(holding) ?? 1)
+const holdingMarketValue = computed(() => store.activeHoldings.reduce((sum, holding) => sum + holdingValue(holding), 0))
+const holdingTotalExposure = computed(() => store.activeHoldings.reduce((sum, holding) => sum + holdingExposureValue(holding), 0))
 const latestClosingDate = computed(() => store.activeHoldings.map((holding) => holding.priceAsOfDate).filter(Boolean).sort().at(-1) || '')
 const pendingDeleteHolding = computed(() => store.activeHoldings.find((holding) => holding.id === pendingDeleteHoldingId.value) || null)
 const sortLabels = { ticker: '代號', quantity: '股數', marketValue: '市值' }
-const holdingValue = (holding) => Number(displayQuantity(holding) || 0) * Number(displayPrice(holding) || 0) * Number(holding.multiplier || 1)
 const displayedHoldings = computed(() => {
   const query = holdingQuery.value.trim().toLocaleLowerCase('zh-TW')
   const holdings = store.activeHoldings.filter((holding) => !query || `${holding.ticker} ${holding.name}`.toLocaleLowerCase('zh-TW').includes(query))
@@ -51,9 +51,7 @@ const displayedHoldings = computed(() => {
   })
 })
 const holdingListDescription = computed(() => `${holdingQuery.value.trim() ? `${displayedHoldings.value.length} / ` : ''}${store.activeHoldings.length} 筆使用中持倉 · 依${sortLabels[holdingSort.value]}${holdingSort.value === 'ticker' ? '由小到大' : '由高到低'}排列`)
-const holdingClassLabel = (holding) => holding.assetClass === 'other' && holding.assetClassDetail
-  ? `其他 · ${holding.assetClassDetail}`
-  : classLabels[holding.assetClass]
+const holdingClassLabel = (holding) => classLabels[holding.assetClass] || classLabels.equity
 watch(() => form.ticker, () => {
   if (normalizedTicker.value === resolvedTicker.value) return
   lookupRequestId += 1
@@ -65,7 +63,6 @@ watch(() => form.ticker, () => {
   form.priceAsOfDate = null
   form.priceSourceLabel = ''
   form.yahooUrl = ''
-  manualMode.value = false
   Object.assign(lookup, { status: 'idle', message: '', source: '', yahooUrl: '' })
 })
 
@@ -99,21 +96,19 @@ async function lookupTicker() {
     form.priceAsOfDate = instrument.marketDate
     form.priceSourceLabel = instrument.source
     form.yahooUrl = instrument.yahooUrl
-    manualMode.value = false
     Object.assign(lookup, { status: 'success', message: instrument.fallback ? '最新日行情暫時無法取得，目前使用官方快取價格。' : '已自動帶入商品名稱與最新收盤價。', source: instrument.source, yahooUrl: instrument.yahooUrl })
     return true
   } catch (error) {
     if (requestId !== lookupRequestId) return false
-    resolvedTicker.value = normalizedTicker.value
+    resolvedTicker.value = ''
     form.name = ''
     form.market = ''
     form.price = ''
-    form.priceSource = 'manual'
+    form.priceSource = 'auto'
     form.priceAsOfDate = null
     form.priceSourceLabel = ''
     form.yahooUrl = ''
-    manualMode.value = true
-    Object.assign(lookup, { status: 'error', message: error?.message || '商品資料查詢失敗，請改用手動輸入。', source: '', yahooUrl: '' })
+    Object.assign(lookup, { status: 'error', message: error?.message || '商品資料查詢失敗，請確認代號後再試一次。', source: '', yahooUrl: '' })
     return false
   } finally {
     if (requestId === lookupRequestId) lookup.loading = false
@@ -125,46 +120,16 @@ async function lookupTickerAndFocusQuantity() {
     showToast({ tone: 'error', title: '無法查詢商品', message: '請輸入股票或商品代號。' })
     return
   }
-  const alreadyReady = manualMode.value || (resolvedTicker.value === normalizedTicker.value && instrumentReady.value)
+  const alreadyReady = resolvedTicker.value === normalizedTicker.value && instrumentReady.value
   const found = alreadyReady || await lookupTicker()
   if (!found) return
   await nextTick()
   quantityInput.value?.focus()
 }
 
-function useManualMode() {
-  lookupRequestId += 1
-  lookup.loading = false
-  resolvedTicker.value = normalizedTicker.value
-  form.name = ''
-  form.market = ''
-  form.price = ''
-  form.priceSource = 'manual'
-  form.priceAsOfDate = null
-  form.priceSourceLabel = ''
-  form.yahooUrl = ''
-  manualMode.value = true
-  Object.assign(lookup, { status: 'manual', message: '目前使用手動資料；適合海外或官方資料未收錄的商品。', source: '', yahooUrl: '' })
-}
-
-async function useAutomaticMode() {
-  const manualValues = { name: form.name, price: form.price }
-  manualMode.value = false
-  form.priceSource = 'auto'
-  resolvedTicker.value = ''
-  Object.assign(lookup, { status: 'idle', message: '', source: '', yahooUrl: '' })
-  const found = await lookupTicker()
-  if (!found) {
-    form.name = manualValues.name
-    form.price = manualValues.price
-  }
-}
-
 function resetForm() {
   lookupRequestId += 1
   Object.assign(form, defaultForm())
-  formResetKey.value += 1
-  manualMode.value = false
   resolvedTicker.value = ''
   Object.assign(lookup, { loading: false, status: 'idle', message: '', source: '', yahooUrl: '' })
 }
@@ -178,11 +143,11 @@ async function submit() {
     showToast({ tone: 'error', title: '無法新增持倉', message: '持有數量必須大於 0。' })
     return
   }
-  if (form.assetClass === 'other' && !form.assetClassDetail.trim()) {
-    showToast({ tone: 'error', title: '無法新增持倉', message: '選擇「其他」時，請填寫實際資產類型。' })
+  if (form.leverage === '' || !Number.isInteger(Number(form.leverage))) {
+    showToast({ tone: 'error', title: '無法新增持倉', message: '商品槓桿倍數必須是整數，可填負數、0 或正整數。' })
     return
   }
-  if (!manualMode.value && (resolvedTicker.value !== normalizedTicker.value || !instrumentReady.value)) {
+  if (resolvedTicker.value !== normalizedTicker.value || !instrumentReady.value) {
     const found = await lookupTicker()
     if (!found) return
   }
@@ -190,12 +155,12 @@ async function submit() {
     showToast({
       tone: 'error',
       title: '無法新增持倉',
-      message: manualMode.value ? '請填寫商品名稱，且目前價格必須大於 0。' : '尚未取得可用的商品名稱與價格。'
+      message: '尚未取得可用的商品名稱與價格。'
     })
     return
   }
   try {
-    const addedHolding = { ...form, ticker: normalizedTicker.value, name: form.name.trim(), assetClassDetail: form.assetClass === 'other' ? form.assetClassDetail.trim() : '', quantity: Number(form.quantity), multiplier: Number(form.multiplier), price: Number(form.price) }
+    const addedHolding = { ...form, ticker: normalizedTicker.value, name: form.name.trim(), quantity: Number(form.quantity), leverage: Number(form.leverage), price: Number(form.price) }
     await store.addHolding(addedHolding)
     resetForm()
     showToast({
@@ -286,6 +251,27 @@ async function savePrice(holding, value) {
     showToast({ tone: 'error', title: '持倉修改沒有保存', message: `「${holding.name}」的價格：${error?.message || '無法寫入資料。'}` })
   }
 }
+async function saveLeverage(holding, value) {
+  const leverage = value === '' ? Number.NaN : Number(value)
+  if (!Number.isInteger(leverage)) {
+    leverageDrafts[holding.id] = holding.leverage ?? 1
+    showToast({ tone: 'error', title: '持倉修改沒有保存', message: `「${holding.name}」的商品槓桿倍數必須是整數，可填負數、0 或正整數。` })
+    return
+  }
+  if (leverage === Number(holding.leverage ?? 1)) {
+    delete leverageDrafts[holding.id]
+    return
+  }
+  try {
+    await store.updateHolding(holding.id, { leverage })
+    delete leverageDrafts[holding.id]
+    showToast({ tone: 'success', title: '商品槓桿已更新', message: `「${holding.name}」的槓桿倍數已保存。`, duration: 3000 })
+  } catch (error) {
+    delete leverageDrafts[holding.id]
+    store.error = ''
+    showToast({ tone: 'error', title: '持倉修改沒有保存', message: `「${holding.name}」的槓桿倍數：${error?.message || '無法寫入資料。'}` })
+  }
+}
 async function requestDeleteHolding(holdingId) {
   expandedHoldingId.value = ''
   pendingDeleteHoldingId.value = holdingId
@@ -328,40 +314,26 @@ async function confirmDeleteHolding(holding) {
             <div><strong>{{ form.ticker }} · {{ form.name }}</strong><span>最近收盤價 {{ priceMoney(form.price) }} · {{ lookup.source }} <a v-if="lookup.yahooUrl" :href="lookup.yahooUrl" target="_blank" rel="noreferrer">Yahoo 股市核對</a></span></div>
           </div>
 
-          <AppNotice v-else-if="lookup.status === 'error'" tone="warning" title="無法自動取得商品資料">
-            {{ lookup.message }}名稱與價格欄位已開啟，你仍可手動建立持倉。
-          </AppNotice>
-
-          <AppNotice v-else-if="lookup.status === 'manual'" tone="info" title="手動輸入模式">{{ lookup.message }}</AppNotice>
+          <AppNotice v-else-if="lookup.status === 'error'" tone="warning" title="無法取得商品資料">{{ lookup.message }}</AppNotice>
 
           <div class="create-primary-fields">
-            <div class="field"><label for="quantity">持有數量（股數）</label><FormattedNumberInput :key="`quantity-${formResetKey}`" ref="quantityInput" id="quantity" v-model="form.quantity" class="input input--amount" :min="0" :max-fraction-digits="8" placeholder="請輸入股數" required @keydown.enter.prevent="submitFromNumberInput" /></div>
+            <div class="field"><label for="quantity">持有數量（股數）</label><input id="quantity" ref="quantityInput" v-model.number="form.quantity" class="input input--amount" type="number" inputmode="decimal" min="0" step="any" placeholder="請輸入股數" required @keydown.enter.prevent="submitFromNumberInput" /></div>
             <div class="field"><label for="holding-class">資產類別</label><UiSelect id="holding-class" v-model="form.assetClass" :options="classOptions" /></div>
           </div>
-          <div v-if="manualMode" class="create-primary-fields">
-            <div class="field"><label for="holding-name">商品名稱</label><input id="holding-name" v-model="form.name" class="input" placeholder="例如：元大台灣50" required /></div>
-            <div class="field"><label for="price">目前價格</label><FormattedNumberInput :key="`price-${formResetKey}`" id="price" v-model="form.price" class="input input--amount" :min="0.01" :max-fraction-digits="4" placeholder="請輸入價格" required @keydown.enter.prevent="submitFromNumberInput" /></div>
-          </div>
-          <div v-if="form.assetClass === 'other'" class="field"><label for="holding-class-detail">實際資產類型</label><input id="holding-class-detail" v-model="form.assetClassDetail" class="input" placeholder="例如：黃金、REITs、虛擬資產" required /><span class="field-help">會保存於 JSON，並顯示在持倉卡片。</span></div>
-
           <div class="holding-options">
-            <div class="holding-options__title">持倉設定</div>
+            <div class="holding-options__title"><span>商品槓桿比例</span><small>負數反向 · 0 零曝險 · 正數正向</small></div>
             <div class="holding-options__body">
-              <div class="field"><label for="direction">商品方向</label><UiSelect id="direction" v-model="form.direction" :options="directionOptions" /></div>
-              <div class="field"><label for="multiplier">乘數</label><FormattedNumberInput :key="`multiplier-${formResetKey}`" id="multiplier" v-model="form.multiplier" class="input input--amount" :min="0.0001" :max-fraction-digits="6" /><span class="field-help">一般股票與 ETF 維持 1。</span></div>
-              <label class="checkbox"><input v-model="form.includeInAssets" type="checkbox" />納入總資產</label>
+              <div class="field"><label for="leverage">槓桿倍數（整數）</label><input id="leverage" v-model.number="form.leverage" class="input input--amount" type="number" step="1" required /><span class="field-help">預設 1×。負數代表反向曝險，0 代表不產生市場曝險；所有持倉固定納入資產。</span></div>
             </div>
           </div>
 
           <div class="create-form-actions">
-            <button v-if="lookup.status === 'idle' && !manualMode" class="btn btn-ghost" type="button" @mousedown.prevent @click="useManualMode">海外或其他商品改用手動輸入</button>
-            <button v-if="manualMode" class="btn btn-secondary" type="button" :disabled="lookup.loading || !normalizedTicker" @click="useAutomaticMode"><Search :size="17" />改回自動查詢</button>
-            <button class="btn btn-primary" :disabled="store.saving || lookup.loading">{{ lookup.status === 'success' || manualMode ? '新增持倉' : '查詢並新增' }}</button>
+            <button class="btn btn-primary" :disabled="store.saving || lookup.loading">{{ lookup.status === 'success' ? '新增持倉' : '查詢並新增' }}</button>
           </div>
         </form>
       </UiPanel>
       <UiPanel class="holdings-panel" flush title="目前持倉" :description="holdingListDescription">
-        <template #action><div class="holding-header-summary"><span v-if="latestClosingDate" class="pill pill-neutral">最新收盤日 {{ latestClosingDate }}</span><span class="pill pill-blue">市值 {{ money(holdingMarketValue) }}</span></div></template>
+        <template #action><div class="holding-header-summary"><span v-if="latestClosingDate" class="pill pill-neutral">最新收盤日 {{ latestClosingDate }}</span><span class="pill pill-blue">市值 {{ money(holdingMarketValue) }}</span><span class="pill pill-neutral">淨曝險 {{ money(holdingTotalExposure) }}</span></div></template>
         <div v-if="store.activeHoldings.length" class="holding-list-toolbar">
           <div class="holding-search"><Search :size="17" aria-hidden="true" /><label class="sr-only" for="holding-search">搜尋持倉</label><input id="holding-search" v-model="holdingQuery" type="search" placeholder="搜尋商品代號或名稱" /></div>
           <div class="holding-sort" aria-label="持倉排序方式">
@@ -376,7 +348,7 @@ async function confirmDeleteHolding(holding) {
               <div class="holding-identity">
                 <div class="holding-code-line"><span class="holding-code">{{ holding.ticker }}</span><span class="holding-price-source">{{ holding.priceSource === 'auto' ? '自動價格' : '手動價格' }}</span></div>
                 <h3 class="holding-name">{{ holding.name }}</h3>
-                <div class="holding-meta">{{ holdingClassLabel(holding) }} · {{ directionLabels[holding.direction] }}</div>
+                <div class="holding-meta">{{ holdingClassLabel(holding) }}</div>
               </div>
               <div class="data-row__actions">
                 <a v-if="holding.yahooUrl" class="btn btn-ghost btn-icon quote-action" :href="holding.yahooUrl" target="_blank" rel="noreferrer" :aria-label="`前往 Yahoo 股市核對 ${holding.name} 價格`" title="前往 Yahoo 股市核對價格"><ExternalLink :size="16" aria-hidden="true" /></a>
@@ -388,6 +360,8 @@ async function confirmDeleteHolding(holding) {
             <div class="holding-summary-values">
               <div><span>持有股數</span><strong>{{ quantityText(displayQuantity(holding)) }} 股</strong></div>
               <div><span>目前價格</span><strong>{{ priceMoney(displayPrice(holding)) }}</strong></div>
+              <div><span>槓桿倍數</span><strong>{{ quantityText(displayLeverage(holding)) }}×</strong></div>
+              <div><span>淨曝險值</span><strong>{{ money(holdingExposureValue(holding)) }}</strong></div>
             </div>
             <div v-if="expandedHoldingId === holding.id" :id="`holding-editor-${holding.id}`" class="holding-edit-fields">
               <div class="holding-compact-field">
@@ -397,6 +371,10 @@ async function confirmDeleteHolding(holding) {
               <div class="holding-compact-field">
                 <label :for="`price-${holding.id}`">目前價格</label>
                 <FormattedNumberInput :id="`price-${holding.id}`" class="input input--amount" :model-value="displayPrice(holding)" :min="0.01" :max-fraction-digits="4" @update:model-value="priceDrafts[holding.id] = $event" @change="savePrice(holding, $event)" />
+              </div>
+              <div class="holding-compact-field">
+                <label :for="`leverage-${holding.id}`">商品槓桿倍數</label>
+                <input :id="`leverage-${holding.id}`" class="input input--amount" type="number" step="1" :value="displayLeverage(holding)" @input="leverageDrafts[holding.id] = $event.target.value" @change="saveLeverage(holding, $event.target.value)" />
               </div>
               <div class="holding-editor-status"><span>離開欄位後自動保存；再按一次鉛筆可收合。</span></div>
             </div>
@@ -424,10 +402,10 @@ async function confirmDeleteHolding(holding) {
 .create-form-actions { display: grid; gap: 8px; }
 .create-form-actions .btn { width: 100%; }
 .holding-options { overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-muted); }
-.holding-options__title { padding: 10px 13px; color: var(--text-soft); font-size: .76rem; font-weight: 760; }
+.holding-options__title { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 13px; color: var(--text-soft); font-size: .76rem; font-weight: 760; }
+.holding-options__title small { color: var(--muted); font-size: .66rem; font-weight: 650; }
 .holding-options__body { display: grid; grid-template-columns: 1fr; gap: 13px; padding: 12px 13px 13px; border-top: 1px solid var(--border); }
 .holding-options__body .field { padding-top: 0; }
-.holding-options__body .checkbox { min-height: 40px; padding: 9px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
 .holding-header-summary { display: flex; align-items: center; justify-content: flex-end; gap: 7px; flex-wrap: wrap; }
 .holding-list-toolbar { position: sticky; z-index: 3; top: 10px; display: flex; align-items: center; justify-content: space-between; gap: 9px; margin: 10px 12px; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius-md); background: color-mix(in srgb, var(--surface) 94%, transparent); box-shadow: var(--shadow-xs); backdrop-filter: blur(8px); }
 .holding-search { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; color: var(--muted); }

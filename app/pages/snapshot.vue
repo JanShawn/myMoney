@@ -15,7 +15,7 @@ const today = () => {
 const date = ref(today())
 const taiex = ref(0)
 const ma240 = ref(0)
-const classLabels = { cash: '現金', foreign: '外幣', equity: '股票', bond: '債券', other: '其他資產', liability: '負債' }
+const behaviorLabels = { manual: '台幣帳戶', foreign: '外幣帳戶', cash: '系統現金', liability: '負債' }
 const money = (value) => new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', maximumFractionDigits: 0 }).format(value || 0)
 
 watch(() => store.config, (config) => {
@@ -99,9 +99,9 @@ async function save() {
           <template #action><span class="pill pill-neutral">{{ group.items.length }} 個待盤點項目</span></template>
           <div class="data-list">
           <div v-for="item in group.items" :key="item.id" class="data-row snapshot-row">
-            <div class="data-row__main"><div class="data-row__title">{{ item.name }}</div><div class="data-row__meta">{{ classLabels[item.assetClass] }} · {{ item.currency }} · {{ item.includeInAssets ? '納入資產' : '不納入資產' }}</div></div>
+            <div class="data-row__main"><div class="data-row__title">{{ item.name }}</div><div class="data-row__meta">{{ behaviorLabels[item.behavior] }} · {{ item.currency }}</div></div>
             <div v-if="item.currency !== 'TWD'" class="field"><label>系統匯率</label><div class="rate-readout">1 {{ item.currency }} = NT$ {{ number(item.exchangeRate, 6) }}</div></div>
-            <span v-else class="pill">{{ item.liquidity === 'available' ? '立即可用' : item.liquidity === 'convertible' ? '可變現' : '受限制' }}</span>
+            <span v-else class="pill">{{ item.liquidity === 'available' ? '立即可用' : '受限制' }}</span>
             <div class="field"><span class="field-label">目前餘額</span><div class="amount-readout">{{ number(item.amount) }} <small>{{ item.currency }}</small></div></div>
           </div>
           </div>

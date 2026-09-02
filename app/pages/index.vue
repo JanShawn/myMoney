@@ -1,20 +1,19 @@
 <script setup>
-import { Banknote, Clock3, Eye, EyeOff, Landmark, Save, Trash2, TrendingUp, Wallet } from '@lucide/vue'
+import { Banknote, Clock3, Eye, EyeOff, Landmark, Trash2, TrendingUp, Wallet } from '@lucide/vue'
 import { useMoneyStore } from '~/stores/money'
 
 const store = useMoneyStore()
 const { showToast } = useToast()
+const { isDark } = useTheme()
+const chartColors = computed(() => isDark.value
+  ? { cash: '#70d3c6', stocks: '#62d9c9', bonds: '#77c9ee', other: '#829b97', debt: '#ff9188', stockAlt: '#49bfb5', market: '#77c9ee', ma: '#f0bf68', fill: 'rgba(98,217,201,.14)' }
+  : { cash: '#5bb9ad', stocks: '#0f766e', bonds: '#0369a1', other: '#9db7b2', debt: '#d77a70', stockAlt: '#0ea5a4', market: '#0369a1', ma: '#d18432', fill: 'rgba(15,118,110,.12)' })
 const money = (value) => new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', maximumFractionDigits: 0 }).format(value || 0)
 const number = (value) => new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 2 }).format(Number(value) || 0)
 const dateTime = (value) => value ? new Intl.DateTimeFormat('zh-TW', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '尚未完成驗算'
-const targetForm = reactive({ cash: 20, stocks: 60, bonds: 20 })
 const pendingDeleteDate = ref('')
 const hideAmounts = ref(false)
 const displayMoney = (value) => hideAmounts.value ? 'NT$ ******' : money(value)
-
-watch(() => store.config?.settings?.allocationTargets, (targets) => {
-  if (targets) Object.assign(targetForm, targets)
-}, { immediate: true, deep: true })
 
 const chartSnapshots = computed(() => {
   const limit = store.config?.settings?.snapshotDisplayLimit || 30
@@ -24,29 +23,24 @@ const hasTrendData = computed(() => chartSnapshots.value.length >= 2)
 const hasSnapshotData = computed(() => chartSnapshots.value.length >= 1)
 const hasAllocationData = computed(() => Number(store.summary?.totalAssets) > 0 || Number(store.summary?.totalLiabilities) > 0)
 const allocationBase = computed(() => Number(store.summary?.availableCash || 0) + Number(store.summary?.totalStocks || 0) + Number(store.summary?.totalBonds || 0))
-const targetTotal = computed(() => Number(targetForm.cash || 0) + Number(targetForm.stocks || 0) + Number(targetForm.bonds || 0))
+const investedAmount = computed(() => Number(store.summary?.totalStocks || 0) + Number(store.summary?.totalBonds || 0))
+const investmentExposure = computed(() => Number(store.summary?.totalInvestmentExposure || 0))
+const cashAllocationRatio = computed(() => allocationBase.value ? Number(store.summary?.availableCash || 0) / allocationBase.value : 0)
+const weightedLeverage = computed(() => investedAmount.value ? investmentExposure.value / investedAmount.value : 0)
 const allocationRows = computed(() => [
-  { key: 'cash', label: '可動用現金', current: Number(store.summary?.availableCash || 0), target: Number(targetForm.cash || 0), color: '#5bb9ad' },
-  { key: 'stocks', label: '股票市值', current: Number(store.summary?.totalStocks || 0), target: Number(targetForm.stocks || 0), color: '#0f766e' },
-  { key: 'bonds', label: '債券市值', current: Number(store.summary?.totalBonds || 0), target: Number(targetForm.bonds || 0), color: '#0369a1' }
+  { key: 'cash', label: '可動用現金', current: Number(store.summary?.availableCash || 0), exposure: null, color: chartColors.value.cash },
+  { key: 'stocks', label: '股票市值', current: Number(store.summary?.totalStocks || 0), exposure: Number(store.summary?.totalStockExposure || 0), color: chartColors.value.stocks },
+  { key: 'bonds', label: '債券市值', current: Number(store.summary?.totalBonds || 0), exposure: Number(store.summary?.totalBondExposure || 0), color: chartColors.value.bonds }
 ].map((row) => ({
   ...row,
   ratio: allocationBase.value ? row.current / allocationBase.value : 0,
-  targetAmount: allocationBase.value * row.target / 100,
-  delta: allocationBase.value * row.target / 100 - row.current
+  exposureRatio: allocationBase.value && row.exposure != null ? row.exposure / allocationBase.value : null,
+  positionLeverage: row.current && row.exposure != null ? row.exposure / row.current : null
 })))
+const stockAllocation = computed(() => allocationRows.value.find((row) => row.key === 'stocks'))
+const bondAllocation = computed(() => allocationRows.value.find((row) => row.key === 'bonds'))
 const recentMarketRecords = computed(() => [...chartSnapshots.value].slice(-6).reverse())
 const pendingDeleteRecord = computed(() => store.snapshots.find((record) => record.date === pendingDeleteDate.value) || null)
-const adjustmentText = (row) => {
-  if (Math.abs(row.delta) < 1) return '已接近目標'
-  if (row.key === 'cash') return row.delta > 0 ? `現金需增加${hideAmounts.value ? '' : ` ${money(row.delta)}`}` : `可釋出${hideAmounts.value ? '' : ` ${money(Math.abs(row.delta))}`}`
-  return row.delta > 0 ? `尚可投入${hideAmounts.value ? '' : ` ${money(row.delta)}`}` : `超出目標${hideAmounts.value ? '' : ` ${money(Math.abs(row.delta))}`}`
-}
-async function saveAllocationTargets() {
-  if (Math.abs(targetTotal.value - 100) > 0.001) return
-  await store.updateSettings({ allocationTargets: { cash: Number(targetForm.cash), stocks: Number(targetForm.stocks), bonds: Number(targetForm.bonds) } })
-  showToast({ tone: 'success', title: '配置目標已保存', message: '新的現金、股票與債券目標比例已套用。' })
-}
 async function confirmDeleteSnapshot() {
   if (!pendingDeleteRecord.value) return
   const snapshotDate = pendingDeleteRecord.value.date
@@ -62,11 +56,11 @@ async function confirmDeleteSnapshot() {
 const labels = computed(() => chartSnapshots.value.map((item) => item.date.slice(5)))
 const netWorthData = computed(() => ({
   labels: labels.value,
-  datasets: [{ label: '淨資產', data: chartSnapshots.value.map((item) => item.netWorth), borderColor: '#0f766e', backgroundColor: 'rgba(15,118,110,.12)', fill: true, tension: .32 }]
+  datasets: [{ label: '淨資產', data: chartSnapshots.value.map((item) => item.netWorth), borderColor: chartColors.value.stocks, backgroundColor: chartColors.value.fill, fill: true, tension: .32 }]
 }))
 const allocationData = computed(() => ({
   labels: ['股票', '債券', '可動用現金', '其他／受限制資產', '負債'],
-  datasets: [{ data: [store.summary?.totalStocks || 0, store.summary?.totalBonds || 0, store.summary?.availableCash || 0, Number(store.summary?.totalOther || 0) + Number(store.summary?.restrictedCash || 0), store.summary?.totalLiabilities || 0], backgroundColor: ['#0f766e', '#0369a1', '#5bb9ad', '#9db7b2', '#d77a70'], borderWidth: 0 }]
+  datasets: [{ data: [store.summary?.totalStocks || 0, store.summary?.totalBonds || 0, store.summary?.availableCash || 0, Number(store.summary?.totalOther || 0) + Number(store.summary?.restrictedCash || 0), store.summary?.totalLiabilities || 0], backgroundColor: [chartColors.value.stocks, chartColors.value.bonds, chartColors.value.cash, chartColors.value.other, chartColors.value.debt], borderWidth: 0 }]
 }))
 function normalized(key) {
   const first = chartSnapshots.value.find((item) => Number(item[key]) > 0)?.[key]
@@ -75,16 +69,16 @@ function normalized(key) {
 const benchmarkData = computed(() => ({
   labels: labels.value,
   datasets: [
-    { label: '淨資產（起點=100）', data: normalized('netWorth'), borderColor: '#0f766e', tension: .3 },
-    { label: '股票資產（起點=100）', data: normalized('totalStocks'), borderColor: '#0ea5a4', tension: .3 },
-    { label: '加權指數（起點=100）', data: normalized('taiex'), borderColor: '#0369a1', tension: .3 }
+    { label: '淨資產（起點=100）', data: normalized('netWorth'), borderColor: chartColors.value.stocks, tension: .3 },
+    { label: '股票資產（起點=100）', data: normalized('totalStocks'), borderColor: chartColors.value.stockAlt, tension: .3 },
+    { label: '加權指數（起點=100）', data: normalized('taiex'), borderColor: chartColors.value.market, tension: .3 }
   ]
 }))
 const marketData = computed(() => ({
   labels: labels.value,
   datasets: [
-    { label: '加權指數', data: chartSnapshots.value.map((item) => item.taiex), borderColor: '#0369a1', tension: .28 },
-    { label: '240MA', data: chartSnapshots.value.map((item) => item.ma240), borderColor: '#d18432', borderDash: [6, 5], tension: .2 }
+    { label: '加權指數', data: chartSnapshots.value.map((item) => item.taiex), borderColor: chartColors.value.market, tension: .28 },
+    { label: '240MA', data: chartSnapshots.value.map((item) => item.ma240), borderColor: chartColors.value.ma, borderDash: [6, 5], tension: .2 }
   ]
 }))
 </script>
@@ -126,26 +120,43 @@ const marketData = computed(() => ({
         </MetricCard>
       </section>
 
-      <UiPanel class="space-before allocation-panel" title="配置比例與投入試算" description="可動用現金已包含外幣換算；與股票、債券一起比較配置比例。">
-        <div class="allocation-layout">
-          <div class="allocation-current">
-            <div v-for="row in allocationRows" :key="row.key" class="allocation-row">
-              <div class="allocation-row__heading"><strong>{{ row.label }}</strong><span>{{ displayMoney(row.current) }} · {{ (row.ratio * 100).toFixed(1) }}%</span></div>
-              <div class="allocation-track"><span :style="{ width: `${Math.min(row.ratio * 100, 100)}%`, background: row.color }" /></div>
-              <div class="allocation-row__detail"><span>目標 {{ row.target.toFixed(1) }}%（{{ displayMoney(row.targetAmount) }}）</span><strong :class="{ negative: row.delta < -1 }">{{ adjustmentText(row) }}</strong></div>
-            </div>
-            <AppNotice v-if="!allocationBase" title="還沒有可試算的配置">建立現金帳戶或投資持倉後，這裡會自動顯示比例與投入差額。</AppNotice>
+      <UiPanel class="space-before allocation-panel" title="曝險比例與資金配置" description="聚焦部位加權、現金配置，以及股票的實際淨曝險。">
+        <div class="allocation-current">
+          <div class="position-leverage-summary" :class="{ negative: weightedLeverage < 0 }">
+            <div><span>部位加權</span><small>淨曝險值 ÷ 股票與債券市值</small></div>
+            <strong>{{ weightedLeverage.toFixed(2) }}×</strong>
           </div>
-          <div class="target-form">
-            <div class="target-form__title"><strong>目標比例</strong><span>合計必須是 100%</span></div>
-            <div class="target-inputs">
-              <div class="field"><label for="target-cash">現金 %</label><FormattedNumberInput id="target-cash" v-model="targetForm.cash" class="input input--amount" :min="0" :max="100" :max-fraction-digits="1" /></div>
-              <div class="field"><label for="target-stocks">股票 %</label><FormattedNumberInput id="target-stocks" v-model="targetForm.stocks" class="input input--amount" :min="0" :max="100" :max-fraction-digits="1" /></div>
-              <div class="field"><label for="target-bonds">債券 %</label><FormattedNumberInput id="target-bonds" v-model="targetForm.bonds" class="input input--amount" :min="0" :max="100" :max-fraction-digits="1" /></div>
-            </div>
-            <AppNotice v-if="Math.abs(targetTotal - 100) > 0.001" tone="warning" title="目標比例尚未對齊">目前合計 {{ targetTotal.toFixed(1) }}%，請調整為 100%。</AppNotice>
-            <button class="btn btn-secondary btn-block" type="button" :disabled="store.saving || Math.abs(targetTotal - 100) > 0.001" @click="saveAllocationTargets"><Save :size="17" />保存配置目標</button>
+
+          <div class="allocation-briefs">
+            <section class="allocation-brief allocation-brief--stocks" aria-labelledby="stock-allocation-title">
+              <div class="allocation-brief__heading">
+                <h3 id="stock-allocation-title">股票市值</h3>
+                <span>{{ displayMoney(stockAllocation?.current) }} · 市值配置 {{ ((stockAllocation?.ratio || 0) * 100).toFixed(1) }}%</span>
+              </div>
+              <div class="stock-exposure-metrics">
+                <div class="stock-exposure-metrics__primary" :class="{ negative: stockAllocation?.exposureRatio < 0 }"><span>淨曝險比例</span><strong>{{ ((stockAllocation?.exposureRatio || 0) * 100).toFixed(1) }}%</strong></div>
+                <div><span>淨曝險值</span><strong>{{ displayMoney(stockAllocation?.exposure) }}</strong></div>
+                <div><span>商品加權槓桿</span><strong>{{ (stockAllocation?.positionLeverage || 0).toFixed(2) }}×</strong></div>
+              </div>
+            </section>
+
+            <section class="allocation-brief" aria-labelledby="cash-allocation-title">
+              <h3 id="cash-allocation-title">可動用現金</h3>
+              <div class="allocation-brief__metrics">
+                <div><span>配置比例</span><strong>{{ (cashAllocationRatio * 100).toFixed(1) }}%</strong></div>
+                <div><span>投入金額</span><strong>{{ displayMoney(store.summary?.availableCash) }}</strong></div>
+              </div>
+            </section>
+
+            <section class="allocation-brief" aria-labelledby="bond-allocation-title">
+              <h3 id="bond-allocation-title">債券市值</h3>
+              <div class="allocation-brief__metrics">
+                <div><span>市值配置</span><strong>{{ ((bondAllocation?.ratio || 0) * 100).toFixed(1) }}%</strong></div>
+                <div><span>目前市值</span><strong>{{ displayMoney(bondAllocation?.current) }}</strong></div>
+              </div>
+            </section>
           </div>
+          <AppNotice v-if="!allocationBase" title="還沒有可試算的配置">建立現金帳戶或投資持倉後，這裡會自動顯示淨曝險比例。</AppNotice>
         </div>
       </UiPanel>
 
@@ -193,20 +204,31 @@ const marketData = computed(() => ({
 <style scoped>
 .dashboard-actions { display: flex; align-items: center; justify-content: flex-end; gap: 9px; flex-wrap: wrap; }
 .privacy-toggle { min-width: 124px; }
-.allocation-layout { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(280px, .6fr); gap: 24px; }
-.allocation-current { display: grid; gap: 18px; }
-.allocation-row { display: grid; gap: 8px; }
-.allocation-row__heading, .allocation-row__detail { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
-.allocation-row__heading strong { font-size: .88rem; }
-.allocation-row__heading span, .allocation-row__detail { color: var(--muted); font-size: .75rem; }
-.allocation-row__detail strong { color: var(--primary); font-size: .75rem; }
-.allocation-track { height: 9px; overflow: hidden; border-radius: 999px; background: var(--surface-muted); }
-.allocation-track span { display: block; height: 100%; border-radius: inherit; transition: width .25s ease; }
-.target-form { display: grid; align-content: start; gap: 14px; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-muted); }
-.target-form__title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.target-form__title strong { font-size: .88rem; }
-.target-form__title span { color: var(--muted); font-size: .72rem; }
-.target-inputs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.allocation-current { display: grid; gap: 14px; }
+.position-leverage-summary { min-height: 88px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 16px 18px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--primary-soft); }
+.position-leverage-summary > div { display: grid; gap: 4px; }
+.position-leverage-summary span { color: var(--text-soft); font-size: .8rem; font-weight: 760; }
+.position-leverage-summary small { color: var(--muted); font-size: .7rem; }
+.position-leverage-summary > strong { color: var(--primary); font-size: clamp(1.8rem, 4vw, 2.55rem); line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -.035em; }
+.position-leverage-summary.negative { background: var(--danger-soft); }
+.position-leverage-summary.negative > strong { color: var(--danger); }
+.allocation-briefs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.allocation-brief { display: grid; gap: 12px; padding: 15px 16px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-muted); }
+.allocation-brief h3 { margin: 0; color: var(--text); font-size: .88rem; }
+.allocation-brief__heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.allocation-brief__heading > span { color: var(--muted); font-size: .72rem; font-variant-numeric: tabular-nums; }
+.allocation-brief__metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.allocation-brief__metrics > div, .stock-exposure-metrics > div { display: grid; gap: 4px; min-width: 0; }
+.allocation-brief__metrics span, .stock-exposure-metrics span { color: var(--muted); font-size: .68rem; font-weight: 700; }
+.allocation-brief__metrics strong { color: var(--text); font-size: 1.02rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.allocation-brief--stocks { width: 100%; grid-column: 1 / -1; }
+.stock-exposure-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--border); }
+.stock-exposure-metrics > div { padding: 11px 12px; background: var(--surface); }
+.stock-exposure-metrics strong { color: var(--primary); font-size: .92rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.stock-exposure-metrics__primary { background: var(--primary-soft) !important; }
+.stock-exposure-metrics__primary strong { font-size: 1.18rem; }
+.stock-exposure-metrics__primary.negative { background: var(--danger-soft) !important; }
+.stock-exposure-metrics__primary.negative strong { color: var(--danger); }
 .market-records { overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-md); }
 .market-record { display: grid; grid-template-columns: 1fr repeat(3, minmax(120px, .8fr)) 42px; align-items: center; gap: 16px; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: .78rem; }
 .market-record:last-child { border-bottom: 0; }
@@ -215,12 +237,14 @@ const marketData = computed(() => ({
 .market-record__action-label { text-align: center !important; }
 .market-record__delete { width: 34px; height: 34px; justify-self: end; color: var(--muted); }
 .market-record__delete:hover { background: var(--danger-soft); color: var(--danger); }
-@media (max-width: 880px) { .allocation-layout { grid-template-columns: 1fr; } }
 @media (max-width: 620px) {
   .dashboard-actions { width: 100%; }
   .dashboard-actions .btn { flex: 1; }
-  .target-inputs { grid-template-columns: 1fr; }
-  .allocation-row__detail { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .position-leverage-summary { align-items: flex-start; flex-direction: column; gap: 12px; }
+  .allocation-briefs { grid-template-columns: 1fr; }
+  .allocation-brief--stocks { width: 100%; grid-column: auto; }
+  .allocation-brief__heading { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .stock-exposure-metrics { grid-template-columns: 1fr; }
   .market-records { overflow-x: auto; }
   .market-record { min-width: 680px; }
 }

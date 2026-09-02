@@ -133,16 +133,16 @@ onBeforeUnmount(() => {
 <style scoped>
 .ui-select { position: relative; min-width: 0; }
 .ui-select__trigger { width: 100%; min-height: 46px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 11px 10px 13px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); cursor: pointer; text-align: left; transition: border-color .18s, box-shadow .18s, background .18s; }
-.ui-select__trigger:hover:not(:disabled) { border-color: #99b5b0; background: #fcfefd; }
-.ui-select__trigger:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(11, 107, 99, .12); }
+.ui-select__trigger:hover:not(:disabled) { border-color: var(--control-hover-border); background: var(--surface-hover); }
+.ui-select__trigger:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--control-ring); }
 .ui-select__value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ui-select__chevron { flex: 0 0 auto; color: var(--muted); transition: transform .18s, color .18s; }
-.ui-select--open .ui-select__trigger { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(11, 107, 99, .12); }
+.ui-select--open .ui-select__trigger { border-color: var(--primary); box-shadow: 0 0 0 3px var(--control-ring); }
 .ui-select--open .ui-select__chevron { color: var(--primary); transform: rotate(180deg); }
-.ui-select--disabled .ui-select__trigger { background: #f1f5f4; color: var(--muted); cursor: not-allowed; }
-.ui-select__menu { position: fixed; z-index: 120; overflow-y: auto; scrollbar-width: none; -ms-overflow-style: none; padding: 6px; border: 1px solid var(--border); border-radius: 13px; background: rgba(255,255,255,.98); box-shadow: 0 16px 38px rgba(20,59,55,.16), 0 3px 8px rgba(20,59,55,.08); backdrop-filter: blur(14px); }
+.ui-select--disabled .ui-select__trigger { background: var(--surface-disabled); color: var(--muted); cursor: not-allowed; }
+.ui-select__menu { position: fixed; z-index: 120; overflow-y: auto; scrollbar-width: none; -ms-overflow-style: none; padding: 6px; border: 1px solid var(--border); border-radius: 13px; background: var(--surface-elevated); box-shadow: var(--shadow-md); backdrop-filter: blur(14px); }
 .ui-select__menu::-webkit-scrollbar { width: 0; height: 0; }
 .ui-select__option { width: 100%; min-height: 40px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; border: 0; border-radius: 9px; background: transparent; color: var(--text-soft); cursor: pointer; text-align: left; font-size: .86rem; }
-.ui-select__option--active { background: #f0f7f5; color: var(--text); }
+.ui-select__option--active { background: var(--surface-hover); color: var(--text); }
 .ui-select__option--selected { background: var(--primary-soft); color: var(--primary); font-weight: 730; }
 </style>

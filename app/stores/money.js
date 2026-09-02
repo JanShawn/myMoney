@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { toRaw } from 'vue'
-import { calculateRecurringCashflow, calculateSummary, createDefaultConfig, normalizeConfig, SYSTEM_CASH_GROUP_ID, SYSTEM_CASH_ITEM_ID, upsertSnapshot } from '~/services/money-domain'
+import { calculateRecurringCashflow, calculateSummary, createDefaultConfig, normalizeAccountItem, normalizeConfig, SYSTEM_CASH_GROUP_ID, SYSTEM_CASH_ITEM_ID, upsertSnapshot } from '~/services/money-domain'
 import {
   importJsonFile, inspectJsonImport, listLocalBackups, loadLocalData, persistLocalData,
   resetLocalData, restoreLocalBackup, saveJsonBackup
@@ -107,7 +107,7 @@ export const useMoneyStore = defineStore('money', () => {
   })
 
   const addItem = (body) => mutate((draft) => {
-    const item = { id: crypto.randomUUID(), ...body, archived: false }
+    const item = normalizeAccountItem({ id: crypto.randomUUID(), ...body, archived: false })
     draft.items.push(item)
     return item
   })
@@ -118,6 +118,7 @@ export const useMoneyStore = defineStore('money', () => {
     if (id === SYSTEM_CASH_ITEM_ID && body.archived === true) throw new Error('「身上現金」與現金驗算連動，不能封存。')
     if (id === SYSTEM_CASH_ITEM_ID && body.groupId && body.groupId !== SYSTEM_CASH_GROUP_ID) throw new Error('系統現金帳戶必須保留在「現金」群組。')
     Object.assign(item, body)
+    Object.assign(item, normalizeAccountItem(item))
     if (id === SYSTEM_CASH_ITEM_ID) Object.assign(item, { groupId: SYSTEM_CASH_GROUP_ID, behavior: 'cash', assetClass: 'cash', liquidity: 'available', includeInAssets: true, currency: 'TWD', exchangeRate: 1, archived: false, system: true })
     return item
   })
@@ -132,8 +133,13 @@ export const useMoneyStore = defineStore('money', () => {
   })
 
   const addHolding = (body) => mutate((draft) => {
+    const leverage = Number(body.leverage)
+    if (!Number.isInteger(leverage)) throw new Error('商品槓桿倍數必須是整數。')
     const nextOrder = draft.holdings.reduce((highest, holding) => Math.max(highest, Number(holding.order ?? -1)), -1) + 1
-    const holding = { id: crypto.randomUUID(), ...body, ticker: body.ticker.toUpperCase(), order: nextOrder, archived: false }
+    const holding = { id: crypto.randomUUID(), ...body, ticker: body.ticker.toUpperCase(), assetClass: body.assetClass === 'bond' ? 'bond' : 'equity', leverage, order: nextOrder, archived: false }
+    delete holding.direction
+    delete holding.includeInAssets
+    delete holding.assetClassDetail
     draft.holdings.push(holding)
     return holding
   })
@@ -141,7 +147,20 @@ export const useMoneyStore = defineStore('money', () => {
   const updateHolding = (id, body) => mutate((draft) => {
     const holding = draft.holdings.find((entry) => entry.id === id)
     if (!holding) throw new Error('找不到這筆持倉')
-    Object.assign(holding, body)
+    const changes = { ...body }
+    if ('leverage' in changes) {
+      const leverage = Number(changes.leverage)
+      if (!Number.isInteger(leverage)) throw new Error('商品槓桿倍數必須是整數。')
+      changes.leverage = leverage
+    }
+    delete changes.direction
+    delete changes.includeInAssets
+    delete changes.assetClassDetail
+    if ('assetClass' in changes) changes.assetClass = changes.assetClass === 'bond' ? 'bond' : 'equity'
+    Object.assign(holding, changes)
+    delete holding.includeInAssets
+    delete holding.direction
+    delete holding.assetClassDetail
     return holding
   })
 

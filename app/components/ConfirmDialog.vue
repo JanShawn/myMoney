@@ -43,10 +43,10 @@ watch(() => props.open, async (isOpen) => {
 <style scoped>
 .confirm-dialog-backdrop { position: fixed; z-index: 140; inset: 0; display: grid; place-items: center; padding: 18px; background: rgba(15, 23, 42, .32); backdrop-filter: blur(3px); }
 .confirm-dialog-backdrop:focus { outline: none; }
-.confirm-dialog { width: min(430px, 100%); display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; padding: 20px; border: 1px solid #edcbc7; border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-md); }
+.confirm-dialog { width: min(430px, 100%); display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; padding: 20px; border: 1px solid var(--danger-border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-md); }
 .confirm-dialog__icon { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 12px; background: var(--danger-soft); color: var(--danger); }
 .confirm-dialog__icon--info { background: var(--primary-soft); color: var(--primary); }
-.confirm-dialog__icon--warning { background: #fff3d9; color: #a66912; }
+.confirm-dialog__icon--warning { background: var(--warning-soft); color: var(--warning); }
 .confirm-dialog__content { min-width: 0; }
 .confirm-dialog h2 { margin: 1px 0 8px; font-size: 1.02rem; }
 .confirm-dialog :deep(p) { margin: 4px 0 0; color: var(--muted); font-size: .8rem; line-height: 1.55; overflow-wrap: anywhere; }

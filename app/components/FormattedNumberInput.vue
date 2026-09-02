@@ -47,7 +47,10 @@ function formatValue(value) {
 
 function update(event) {
   const raw = sanitize(event.target.value)
-  displayValue.value = raw === '' || raw === '-' ? raw : groupDigits(raw)
+  const nextDisplayValue = raw === '' || raw === '-' ? raw : groupDigits(raw)
+  displayValue.value = nextDisplayValue
+  // 直接同步原生輸入框，避免快速輸入 0 時，瀏覽器值在 Vue 更新前暫時累加成「00」。
+  if (event.target.value !== nextDisplayValue) event.target.value = nextDisplayValue
   const numeric = Number(raw)
   emit('update:modelValue', raw === '' || raw === '-' || raw.endsWith('.') || !Number.isFinite(numeric) ? '' : numeric)
 }

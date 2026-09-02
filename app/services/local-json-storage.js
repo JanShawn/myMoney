@@ -113,7 +113,7 @@ export function summarizeConfigChanges(beforeInput, afterInput) {
     // 自動行情仍會寫入目前資料與手動 JSON 備份，但不視為使用者資料異動。
     if (holding.priceSource !== 'auto' && Number(previous.price || 0) !== Number(holding.price || 0)) details.push(`價格 ${formatChangedNumber(previous.price)} → ${formatChangedNumber(holding.price)}`)
     const otherFields = changedFields(previous, holding, [
-      ['assetClass'], ['assetClassDetail'], ['direction'], ['multiplier'], ['liquidity'], ['includeInAssets'], ['archived'], ['accountId'], ['order']
+      ['assetClass'], ['assetClassDetail'], ['leverage'], ['liquidity'], ['archived'], ['accountId'], ['order']
     ])
     if (otherFields.length) details.push('持倉分類、排序或設定')
     if (details.length) changes.push(`持倉「${holdingLabel(holding)}」：${details.join('、')}`)

@@ -1,33 +1,31 @@
 <script setup>
-import { ArrowDown, ArrowUp, Lock, Pencil, Plus, RefreshCw, Trash2 } from '@lucide/vue'
+import { ArrowDown, ArrowUp, GripVertical, Lock, Pencil, Plus, RefreshCw, Trash2 } from '@lucide/vue'
 import { useMoneyStore } from '~/stores/money'
 
 const store = useMoneyStore()
 const { showToast } = useToast()
 const groupName = ref('')
 const editing = ref(null)
-const defaultForm = () => ({ groupId: '', name: '', behavior: 'manual', assetClass: 'cash', assetClassDetail: '', liquidity: 'available', amount: '', currency: 'TWD', exchangeRate: 1, includeInAssets: true })
+const defaultForm = () => ({ groupId: '', name: '', behavior: 'manual', liquidity: 'available', amount: '', currency: 'TWD', exchangeRate: 1 })
 const form = reactive(defaultForm())
 const pendingDeleteGroupId = ref('')
 const pendingDeleteItemId = ref('')
+const draggingItemId = ref('')
+const dragOverGroupId = ref('')
 const fx = reactive({ loading: false, message: '', error: '' })
 const behaviorLabels = { manual: '台幣帳戶', foreign: '外幣帳戶', cash: '系統現金', liability: '負債' }
-const classLabels = { cash: '現金', foreign: '外幣', equity: '股票', bond: '債券', other: '其他資產', liability: '負債' }
-const liquidityLabels = { available: '立即可用', convertible: '可變現', locked: '受限制' }
+const liquidityLabels = { available: '立即可用', locked: '受限制' }
 const behaviorOptions = Object.entries(behaviorLabels).filter(([value]) => value !== 'cash').map(([value, label]) => ({ value, label }))
 const editBehaviorOptions = computed(() => editing.value?.behavior === 'cash' && !editing.value?.system
   ? [{ value: 'cash', label: '舊版現金驗算帳戶' }, ...behaviorOptions]
   : behaviorOptions)
-const classOptions = Object.entries(classLabels).map(([value, label]) => ({ value, label }))
 const liquidityOptions = [
   { value: 'available', label: '立即可用' },
-  { value: 'convertible', label: '可變現' },
   { value: 'locked', label: '受限制' }
 ]
 const liquidityHelp = (value) => ({
-  available: '現金或外幣會計入首頁的「可動用現金」；勾選納入資產後，也會計入總資產與淨資產。',
-  convertible: '現金或外幣仍會計入「可動用現金」，代表需要兌換或變現後才能使用；也會依設定計入總資產。',
-  locked: '仍可計入總資產與淨資產，但不會計入「可動用現金」，適合暫時不能使用的資產。'
+  available: '會計入可動用現金，適合能立即提領或轉帳的餘額。',
+  locked: '仍計入資產，但不計入可動用現金；負債固定使用此狀態。'
 }[value] || '')
 const currencyOptions = [{ value: 'USD', label: 'USD · 美金' }, { value: 'JPY', label: 'JPY · 日幣' }]
 const groups = computed(() => [...(store.config?.groups || [])].filter((g) => !g.archived).sort((a, b) => a.order - b.order))
@@ -39,12 +37,9 @@ const foreignMoney = (value, currency) => new Intl.NumberFormat('zh-TW', { style
 const fxUpdatedText = computed(() => store.config?.market?.fxUpdatedAt
   ? new Intl.DateTimeFormat('zh-TW', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(store.config.market.fxUpdatedAt))
   : '尚未取得')
-const itemClassLabel = (item) => item.assetClass === 'other' && item.assetClassDetail
-  ? `其他 · ${item.assetClassDetail}`
-  : classLabels[item.assetClass]
 
 watch(groups, (value) => {
-  if (!value.some((group) => group.id === form.groupId)) form.groupId = value[0]?.id || ''
+  if (!value.some((group) => group.id === form.groupId)) form.groupId = value.find((group) => !group.system)?.id || value[0]?.id || ''
 }, { immediate: true })
 
 async function applyExchangeRate(target, force = false) {
@@ -85,18 +80,16 @@ async function applyExchangeRate(target, force = false) {
 function applyBehavior(target, behavior) {
   if (!target) return
   if (behavior === 'liability') {
-    Object.assign(target, { assetClass: 'liability', includeInAssets: false, liquidity: 'locked', currency: 'TWD', exchangeRate: 1 })
+    Object.assign(target, { liquidity: 'locked', currency: 'TWD', exchangeRate: 1 })
   } else if (behavior === 'cash') {
-    Object.assign(target, { assetClass: 'cash', includeInAssets: true, liquidity: 'available', currency: 'TWD', exchangeRate: 1 })
+    Object.assign(target, { liquidity: 'available', currency: 'TWD', exchangeRate: 1 })
   } else if (behavior === 'foreign') {
-    target.assetClass = 'foreign'
-    target.includeInAssets = true
-    target.liquidity = 'available'
+    if (!liquidityOptions.some((option) => option.value === target.liquidity)) target.liquidity = 'available'
     if (!['USD', 'JPY'].includes(target.currency)) target.currency = 'USD'
     applyExchangeRate(target)
   } else {
-    if (target.assetClass === 'foreign' || target.assetClass === 'liability') target.assetClass = 'cash'
-    Object.assign(target, { includeInAssets: true, currency: 'TWD', exchangeRate: 1 })
+    if (!liquidityOptions.some((option) => option.value === target.liquidity)) target.liquidity = 'available'
+    Object.assign(target, { currency: 'TWD', exchangeRate: 1 })
   }
 }
 
@@ -129,12 +122,11 @@ async function submitItem() {
   if (!form.groupId) { showToast({ tone: 'error', title: '無法新增帳戶', message: '請先建立並選擇一個群組。' }); return }
   if (!form.name.trim()) { showToast({ tone: 'error', title: '無法新增帳戶', message: '請輸入帳戶名稱。' }); return }
   if (Number(form.amount) < 0) { showToast({ tone: 'error', title: '無法新增帳戶', message: '帳戶金額不能小於 0；負債也請輸入正數。' }); return }
-  if (form.assetClass === 'other' && !form.assetClassDetail.trim()) { showToast({ tone: 'error', title: '無法新增帳戶', message: '選擇「其他資產」時，請填寫實際項目類型。' }); return }
   if (form.behavior === 'foreign' && !(Number(form.exchangeRate) > 0)) { showToast({ tone: 'error', title: '無法新增帳戶', message: '目前沒有可用匯率，請更新成功後再新增外幣帳戶。' }); return }
   const itemName = form.name.trim()
   try {
-    await store.addItem({ ...form, name: itemName, assetClassDetail: form.assetClass === 'other' ? form.assetClassDetail.trim() : '', amount: Number(form.amount || 0), exchangeRate: Number(form.exchangeRate) })
-    Object.assign(form, defaultForm(), { groupId: groups.value[0]?.id || '' })
+    await store.addItem({ ...form, name: itemName, amount: Number(form.amount || 0), exchangeRate: Number(form.exchangeRate) })
+    Object.assign(form, defaultForm(), { groupId: groups.value.find((group) => !group.system)?.id || groups.value[0]?.id || '' })
     showToast({ tone: 'success', title: '帳戶已新增', message: `已建立「${itemName}」。` })
   } catch (error) {
     store.error = ''
@@ -172,17 +164,13 @@ function editItem(item) {
   if (item.behavior === 'foreign') applyExchangeRate(editing.value)
 }
 async function saveEdit() {
-  if (editing.value.assetClass === 'other' && !String(editing.value.assetClassDetail || '').trim()) {
-    showToast({ tone: 'error', title: '無法儲存帳戶', message: '選擇「其他資產」時，請填寫實際項目類型。' })
-    return
-  }
   if (editing.value.behavior === 'foreign' && !(Number(editing.value.exchangeRate) > 0)) {
     showToast({ tone: 'error', title: '無法儲存帳戶', message: '目前沒有可用匯率，請更新成功後再儲存。' })
     return
   }
   const { id, ...input } = editing.value
   try {
-    await store.updateItem(id, { ...input, assetClassDetail: input.assetClass === 'other' ? String(input.assetClassDetail || '').trim() : '', amount: Number(input.amount || 0), exchangeRate: Number(input.exchangeRate || 1) })
+    await store.updateItem(id, { ...input, amount: Number(input.amount || 0), exchangeRate: Number(input.exchangeRate || 1) })
     editing.value = null
     showToast({ tone: 'success', title: '帳戶已更新', message: `「${input.name}」的變更已保存。` })
   } catch (error) {
@@ -214,11 +202,50 @@ async function confirmDeleteItem(item) {
 }
 const itemsFor = (groupId) => store.config?.items?.filter((item) => item.groupId === groupId && !item.archived) || []
 const allItemsFor = (groupId) => store.config?.items?.filter((item) => item.groupId === groupId) || []
+
+function startItemDrag(item, event) {
+  if (item.system) {
+    event.preventDefault()
+    return
+  }
+  draggingItemId.value = item.id
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData('text/plain', item.id)
+}
+
+function finishItemDrag() {
+  draggingItemId.value = ''
+  dragOverGroupId.value = ''
+}
+
+function dragItemOverGroup(group, event) {
+  const item = store.config?.items?.find((entry) => entry.id === draggingItemId.value)
+  if (!item || item.system || item.groupId === group.id) return
+  event.preventDefault()
+  event.dataTransfer.dropEffect = 'move'
+  dragOverGroupId.value = group.id
+}
+
+async function dropItemIntoGroup(group, event) {
+  event.preventDefault()
+  const itemId = draggingItemId.value || event.dataTransfer.getData('text/plain')
+  const item = store.config?.items?.find((entry) => entry.id === itemId)
+  finishItemDrag()
+  if (!item || item.system || item.groupId === group.id) return
+  try {
+    await store.updateItem(item.id, { groupId: group.id })
+    if (editing.value?.id === item.id) editing.value.groupId = group.id
+    showToast({ tone: 'success', title: '帳戶已移動', message: `已將「${item.name}」移至「${group.name}」。`, duration: 2500 })
+  } catch (error) {
+    store.error = ''
+    showToast({ tone: 'error', title: '帳戶移動失敗', message: error?.message || '無法儲存資料。' })
+  }
+}
 </script>
 
 <template>
   <div>
-    <PageHeader eyebrow="Account architecture" title="帳戶結構" description="先用群組整理帳戶；台幣、美元與日圓都會統一換算成台幣後統計。" />
+    <PageHeader eyebrow="Account architecture" title="帳戶結構" description="先用群組整理帳戶；拖曳一般帳戶即可移到其他群組，外幣會統一換算成台幣後統計。" />
 
     <div class="page-grid page-grid--form-list">
       <div class="stack">
@@ -229,15 +256,13 @@ const allItemsFor = (groupId) => store.config?.items?.filter((item) => item.grou
           </form>
         </UiPanel>
 
-        <UiPanel title="新增帳戶或項目" description="帳戶類型決定更新方式；外幣帳戶會自動取得匯率。">
+        <UiPanel title="新增帳戶" description="選擇群組與帳戶類型，其餘計算方式由系統自動處理。">
           <form class="form-grid" @submit.prevent="submitItem">
           <div class="field"><label for="item-group">所屬群組</label><UiSelect id="item-group" v-model="form.groupId" :options="groupOptions" /></div>
-          <div class="field"><label for="item-name">名稱</label><input id="item-name" v-model="form.name" class="input" placeholder="例如：中信活存" required /></div>
-          <div class="field"><label for="behavior">帳戶類型</label><UiSelect id="behavior" v-model="form.behavior" :options="behaviorOptions" /><span class="field-help">台幣帳戶直接輸入台幣餘額；外幣帳戶會自動換算，負債則從淨資產扣除。</span></div>
-          <div class="field"><label for="asset-class">統計類別</label><UiSelect id="asset-class" v-model="form.assetClass" :options="classOptions" :disabled="['foreign', 'liability'].includes(form.behavior)" /></div>
-          <div v-if="form.assetClass === 'other'" class="field"><label for="asset-class-detail">實際項目類型</label><input id="asset-class-detail" v-model="form.assetClassDetail" class="input" placeholder="例如：保單價值、黃金、收藏品" required /></div>
-          <div class="field full"><label for="liquidity">流動性</label><UiSelect id="liquidity" v-model="form.liquidity" :options="liquidityOptions" /><span class="field-help">{{ liquidityHelp(form.liquidity) }}</span></div>
+          <div class="field"><label for="behavior">帳戶類型</label><UiSelect id="behavior" v-model="form.behavior" :options="behaviorOptions" /></div>
+          <div class="field"><label for="item-name">帳戶名稱</label><input id="item-name" v-model="form.name" class="input" placeholder="例如：中信活存" required /></div>
           <div class="field"><label for="amount">目前金額{{ form.behavior === 'foreign' ? `（${form.currency}）` : '' }}</label><FormattedNumberInput id="amount" v-model="form.amount" class="input input--amount" :min="0" :max-fraction-digits="2" placeholder="0" /></div>
+          <div class="field full"><label for="liquidity">流動性</label><UiSelect id="liquidity" v-model="form.liquidity" :options="liquidityOptions" :disabled="form.behavior === 'liability'" /><span class="field-help">{{ liquidityHelp(form.liquidity) }}</span></div>
           <template v-if="form.behavior === 'foreign'">
             <div class="field"><label for="currency">幣別</label><UiSelect id="currency" v-model="form.currency" :options="currencyOptions" /></div>
             <div class="exchange-preview full">
@@ -246,7 +271,6 @@ const allItemsFor = (groupId) => store.config?.items?.filter((item) => item.grou
             </div>
           </template>
           <AppNotice v-if="fx.error && form.behavior === 'foreign'" class="full" tone="warning" title="匯率更新未完成">{{ fx.error }}</AppNotice>
-          <label class="checkbox full"><input v-model="form.includeInAssets" type="checkbox" :disabled="form.behavior === 'liability'" /><span>納入總資產計算；負債會獨立計算並從淨資產扣除。</span></label>
           <div class="form-actions full"><button class="btn btn-primary" :disabled="store.saving || !groups.length"><Plus :size="18" />新增項目</button></div>
           <p class="fx-attribution full">每日參考匯率由 <a href="https://www.exchangerate-api.com" target="_blank" rel="noreferrer">ExchangeRate-API</a> 提供；不是銀行實際成交價。</p>
         </form>
@@ -260,10 +284,8 @@ const allItemsFor = (groupId) => store.config?.items?.filter((item) => item.grou
             <div class="field"><label for="edit-group">所屬群組</label><UiSelect id="edit-group" v-model="editing.groupId" :options="groupOptions" :disabled="editing.system" /></div>
             <div class="field"><label for="edit-name">名稱</label><input id="edit-name" v-model="editing.name" class="input" required /></div>
             <div class="field"><label for="edit-behavior">帳戶類型</label><div v-if="editing.system" class="locked-field">系統現金（固定）</div><UiSelect v-else id="edit-behavior" v-model="editing.behavior" :options="editBehaviorOptions" /></div>
-            <div class="field"><label for="edit-class">統計類別</label><UiSelect id="edit-class" v-model="editing.assetClass" :options="classOptions" :disabled="editing.system || ['foreign', 'liability'].includes(editing.behavior)" /></div>
-            <div v-if="editing.assetClass === 'other'" class="field"><label for="edit-class-detail">實際項目類型</label><input id="edit-class-detail" v-model="editing.assetClassDetail" class="input" placeholder="例如：保單價值、黃金、收藏品" required /></div>
-            <div class="field full"><label for="edit-liquidity">流動性</label><UiSelect id="edit-liquidity" v-model="editing.liquidity" :options="liquidityOptions" :disabled="editing.system" /><span class="field-help">{{ liquidityHelp(editing.liquidity) }}</span></div>
             <div class="field"><label for="edit-amount">目前金額{{ editing.behavior === 'foreign' ? `（${editing.currency}）` : '' }}</label><FormattedNumberInput id="edit-amount" v-model="editing.amount" class="input input--amount" :min="0" :max-fraction-digits="2" /></div>
+            <div class="field full"><label for="edit-liquidity">流動性</label><UiSelect id="edit-liquidity" v-model="editing.liquidity" :options="liquidityOptions" :disabled="editing.system || editing.behavior === 'liability'" /><span class="field-help">{{ liquidityHelp(editing.liquidity) }}</span></div>
             <template v-if="editing.behavior === 'foreign'">
               <div class="field"><label for="edit-currency">幣別</label><UiSelect id="edit-currency" v-model="editing.currency" :options="currencyOptions" /></div>
               <div class="exchange-preview full">
@@ -273,12 +295,19 @@ const allItemsFor = (groupId) => store.config?.items?.filter((item) => item.grou
             </template>
             <AppNotice v-if="fx.error && editing.behavior === 'foreign'" class="full" tone="warning" title="匯率更新未完成">{{ fx.error }}</AppNotice>
             <AppNotice v-if="editing.system" class="full" title="系統連動帳戶">這個帳戶固定提供給現金驗算；可以調整名稱與金額，但不能移動、改變類型或刪除。</AppNotice>
-            <label class="checkbox full"><input v-model="editing.includeInAssets" type="checkbox" :disabled="editing.system" /><span>納入總資產計算</span></label>
             <div class="form-actions full"><button class="btn btn-primary" :disabled="store.saving">儲存項目變更</button></div>
           </form>
         </UiPanel>
 
-        <UiPanel v-for="group in groups" :key="group.id" flush>
+        <UiPanel
+          v-for="group in groups"
+          :key="group.id"
+          flush
+          class="group-drop-panel"
+          :class="{ 'group-drop-panel--active': dragOverGroupId === group.id }"
+          @dragover="dragItemOverGroup(group, $event)"
+          @drop="dropItemIntoGroup(group, $event)"
+        >
           <template #default>
             <div class="group-header">
               <div class="group-header__copy">
@@ -305,9 +334,17 @@ const allItemsFor = (groupId) => store.config?.items?.filter((item) => item.grou
               </template>
             </AppNotice>
             <div v-if="itemsFor(group.id).length" class="data-list">
-              <div v-for="item in itemsFor(group.id)" :key="item.id" class="data-row account-row">
+              <div
+                v-for="item in itemsFor(group.id)"
+                :key="item.id"
+                class="data-row account-row"
+                :class="{ 'account-row--dragging': draggingItemId === item.id, 'account-row--draggable': !item.system }"
+                :draggable="!item.system"
+                @dragstart="startItemDrag(item, $event)"
+                @dragend="finishItemDrag"
+              >
+                <span class="account-drag-handle" :title="item.system ? '系統帳戶不能移動' : '拖曳到其他群組'"><Lock v-if="item.system" :size="16" /><GripVertical v-else :size="18" /></span>
                 <div class="data-row__main"><div class="data-row__title">{{ item.name }}</div><div class="data-row__meta">{{ behaviorLabels[item.behavior] }} · {{ item.currency }} · {{ liquidityLabels[item.liquidity] }}<template v-if="item.currency !== 'TWD'"> · {{ foreignMoney(item.amount, item.currency) }}</template></div></div>
-                <div class="account-label-cell"><span class="pill">{{ itemClassLabel(item) }}<template v-if="item.system"> · 系統連動</template></span></div>
                 <div class="data-row__value">{{ twdMoney(convertedAmount(item)) }}</div>
                 <div class="data-row__actions">
                   <button class="btn btn-ghost btn-icon" type="button" title="編輯項目" @click="editItem(item)"><Pencil :size="17" /></button>
@@ -315,7 +352,7 @@ const allItemsFor = (groupId) => store.config?.items?.filter((item) => item.grou
                 </div>
               </div>
             </div>
-            <EmptyState v-else title="這個群組還沒有項目" description="從左側表單建立第一個帳戶。" />
+            <EmptyState v-else title="這個群組還沒有項目" description="新增帳戶，或把其他群組的帳戶拖曳到這裡。" />
           </template>
         </UiPanel>
         <UiPanel v-if="!groups.length && !store.loading"><EmptyState title="還沒有群組" description="先建立群組，再加入帳戶項目。" /></UiPanel>
@@ -333,8 +370,13 @@ const allItemsFor = (groupId) => store.config?.items?.filter((item) => item.grou
 .group-name:focus { outline: 0; box-shadow: 0 2px 0 var(--primary); }
 .system-group-name { display: flex; align-items: center; gap: 7px; color: var(--text); font-size: 1rem; font-weight: 760; }
 .locked-field { min-height: 46px; display: flex; align-items: center; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-muted); color: var(--muted); font-size: .84rem; font-weight: 700; }
-.account-row { grid-template-columns: minmax(0, 1.5fr) minmax(90px, .55fr) minmax(130px, .7fr) 80px; }
-.account-label-cell { min-height: 40px; display: flex; align-items: center; justify-content: flex-start; }
+.account-row { grid-template-columns: 28px minmax(0, 1.5fr) minmax(130px, .7fr) 80px; }
+.account-row--draggable { cursor: grab; }
+.account-row--draggable:active { cursor: grabbing; }
+.account-row--dragging { opacity: .45; }
+.account-drag-handle { display: grid; place-items: center; color: var(--muted); }
+.group-drop-panel { transition: border-color .16s ease, box-shadow .16s ease, background-color .16s ease; }
+.group-drop-panel--active { border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 16%, transparent); background: color-mix(in srgb, var(--primary) 4%, var(--surface)); }
 .exchange-preview { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-muted); }
 .exchange-preview > div { display: grid; gap: 3px; min-width: 0; }
 .exchange-preview span, .exchange-preview small { color: var(--muted); font-size: .74rem; }
@@ -350,7 +392,8 @@ const allItemsFor = (groupId) => store.config?.items?.filter((item) => item.grou
 @media (max-width: 620px) {
   .group-form { grid-template-columns: 1fr; }
   .group-form .btn { width: 100%; }
-  .account-row { grid-template-columns: minmax(0, 1fr) 80px; }
+  .account-row { grid-template-columns: 24px minmax(0, 1fr) 80px; }
+  .account-row .data-row__value { grid-column: 2; text-align: left; }
   .group-header { align-items: flex-start; padding: 16px 18px; }
   .group-header .btn:not(.btn-icon) { font-size: 0; }
   .group-delete-notice { margin-inline: 18px; }

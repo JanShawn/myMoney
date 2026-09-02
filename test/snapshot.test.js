@@ -13,7 +13,7 @@ describe('snapshot storage', () => {
 
   it('舊版資料會補上靜態架構需要的 snapshots', () => {
     const config = normalizeConfig({ version: 1, groups: [], items: [], holdings: [] })
-    expect(config.version).toBe(3)
+    expect(config.version).toBe(6)
     expect(config.snapshots).toEqual([])
     expect(config.cashDrafts).toEqual({})
     expect(config.settings.snapshotDisplayLimit).toBe(30)
@@ -77,5 +77,18 @@ describe('snapshot storage', () => {
     expect(config.items[0].assetClass).toBe('foreign')
     expect(config.items[0].exchangeRate).toBe(32)
     expect(config.market.fxRates.TWD).toBe(1)
+  })
+
+  it('舊帳戶會依類型自動歸類，且流動性只保留立即可用與受限制', () => {
+    const config = normalizeConfig({
+      items: [
+        { id: 'legacy-other', behavior: 'manual', assetClass: 'other', assetClassDetail: '保單', liquidity: 'convertible', includeInAssets: false },
+        { id: 'debt', behavior: 'liability', assetClass: 'cash', liquidity: 'available', includeInAssets: true }
+      ]
+    })
+
+    expect(config.items[0]).toMatchObject({ assetClass: 'cash', liquidity: 'available', includeInAssets: true })
+    expect(config.items[0]).not.toHaveProperty('assetClassDetail')
+    expect(config.items[1]).toMatchObject({ assetClass: 'liability', liquidity: 'locked', includeInAssets: false })
   })
 })

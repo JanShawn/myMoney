@@ -8,7 +8,7 @@ describe('GitHub 範例資料', () => {
   it('可以載入完整功能所需的資料', () => {
     const config = normalizeConfig(demoData)
 
-    expect(config.version).toBe(3)
+    expect(config.version).toBe(6)
     expect(config.items).toHaveLength(8)
     expect(config.holdings).toHaveLength(3)
     expect(config.recurringCashflowItems).toHaveLength(6)
@@ -25,18 +25,22 @@ describe('GitHub 範例資料', () => {
       totalAssets: 1114400,
       totalLiabilities: 180000,
       netWorth: 934400,
-      availableAssets: 236200,
+      availableAssets: 338400,
       availableCash: 338400,
-      restrictedCash: 300000,
+      restrictedCash: 520000,
       totalStocks: 204000,
       stockRatio: 0.183058,
       totalBonds: 52000,
       bondRatio: 0.046662,
-      totalCash: 536200,
+      totalStockExposure: 204000,
+      totalBondExposure: 52000,
+      totalInvestmentExposure: 256000,
+      totalCash: 756200,
       totalForeign: 102200,
-      totalOther: 220000
+      totalOther: 0
     })
-    expect(latestSnapshot).toMatchObject(summary)
+    const { totalStockExposure, totalBondExposure, totalInvestmentExposure, ...historicalSummary } = summary
+    expect(latestSnapshot).toMatchObject(historicalSummary)
   })
 
   it('可以產生收支規劃摘要', () => {

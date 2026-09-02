@@ -306,8 +306,8 @@ watch(sortKey, (value) => {
 .type-choice { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; border: 0; }
 .type-choice legend { grid-column: 1 / -1; margin-bottom: -1px; color: var(--text-soft); font-size: .8rem; font-weight: 720; }
 .type-choice__button { min-height: 44px; display: flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid var(--border-strong); border-radius: 11px; background: var(--surface); color: var(--muted); cursor: pointer; font-weight: 720; }
-.type-choice__button:hover { border-color: #99b5b0; color: var(--text); }
-.type-choice__button--active { border-color: var(--primary); background: var(--primary-soft); color: var(--primary); box-shadow: 0 0 0 2px rgba(11,107,99,.08); }
+.type-choice__button:hover { border-color: var(--control-hover-border); color: var(--text); }
+.type-choice__button--active { border-color: var(--primary); background: var(--primary-soft); color: var(--primary); box-shadow: 0 0 0 2px var(--control-ring); }
 .occurrence-static { min-height: 46px; display: flex; align-items: center; padding: 10px 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-muted); color: var(--muted); font-size: .84rem; }
 .conversion-preview { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 12px; border-radius: 12px; background: var(--surface-muted); }
 .conversion-preview span { display: grid; gap: 3px; }
@@ -317,7 +317,7 @@ watch(sortKey, (value) => {
 .cashflow-group + .cashflow-group { border-top: 1px solid var(--border); }
 .cashflow-group__header { background: var(--surface-muted); }
 .cashflow-group__header > button { width: 100%; min-height: 62px; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 24px; border: 0; background: transparent; color: inherit; cursor: pointer; text-align: left; }
-.cashflow-group__header > button:hover { background: #f2f8f6; }
+.cashflow-group__header > button:hover { background: var(--surface-hover); }
 .cashflow-group__header div { display: flex; align-items: center; gap: 9px; }
 .cashflow-group__header div > span:last-child { display: grid; gap: 2px; }
 .cashflow-group__header strong { font-size: .86rem; }

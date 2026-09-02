@@ -228,7 +228,7 @@ const money = (value) => new Intl.NumberFormat('zh-TW', { style: 'currency', cur
 .reconciled-time > div { display: grid; gap: 2px; }
 .reconciled-time span { color: var(--muted); font-size: .7rem; }
 .reconciled-time strong { color: var(--text); font-size: .8rem; line-height: 1.4; }
-.baseline-card { display: grid; grid-template-columns: minmax(0, 1fr) minmax(160px, .52fr); align-items: center; gap: 22px; padding: 18px; border: 1px solid #c9dfda; border-radius: var(--radius-md); background: linear-gradient(135deg, #f0f8f6, #fbfdfc); }
+.baseline-card { display: grid; grid-template-columns: minmax(0, 1fr) minmax(160px, .52fr); align-items: center; gap: 22px; padding: 18px; border: 1px solid var(--notice-border); border-radius: var(--radius-md); background: linear-gradient(135deg, var(--notice-bg), var(--surface-hover)); }
 .baseline-card > div { display: grid; gap: 4px; }
 .baseline-card__eyebrow { color: var(--primary); font-size: .68rem; font-weight: 780; letter-spacing: .09em; text-transform: uppercase; }
 .baseline-card label { color: var(--text); font-size: .94rem; font-weight: 750; }
@@ -243,11 +243,11 @@ const money = (value) => new Intl.NumberFormat('zh-TW', { style: 'currency', cur
 .comparison-result > span { color: var(--muted); font-size: .72rem; font-weight: 720; }
 .comparison-result > strong { color: var(--text); font-size: 1.45rem; letter-spacing: -.025em; }
 .comparison-result > small { color: var(--muted); font-size: .76rem; line-height: 1.45; }
-.comparison-result--success { border-color: #bfe0d2; background: var(--success-soft); }
+.comparison-result--success { border-color: var(--success-border); background: var(--success-soft); }
 .comparison-result--success > strong { color: var(--success); }
-.comparison-result--warning { border-color: #ead8ab; background: var(--warning-soft); }
+.comparison-result--warning { border-color: var(--warning-border); background: var(--warning-soft); }
 .comparison-result--warning > strong { color: var(--warning); }
-.comparison-result--error { border-color: #ecc7c3; background: var(--danger-soft); }
+.comparison-result--error { border-color: var(--danger-border); background: var(--danger-soft); }
 .comparison-result--error > strong { color: var(--danger); }
 .apply-button { margin-top: 18px; }
 @media (max-width: 880px) { .result-panel { position: static; } }

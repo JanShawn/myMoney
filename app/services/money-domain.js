@@ -1,7 +1,7 @@
 export const SYSTEM_CASH_GROUP_ID = 'group-cash'
 export const SYSTEM_CASH_ITEM_ID = 'item-cash'
 
-const CONFIG_VERSION = 3
+const CONFIG_VERSION = 6
 const DEFAULT_GROUP_ORDERS = {
   [SYSTEM_CASH_GROUP_ID]: 0,
   'group-bank': 1,
@@ -37,7 +37,6 @@ export function createDefaultConfig() {
     settings: {
       baseCurrency: 'TWD',
       snapshotDisplayLimit: 30,
-      allocationTargets: { cash: 20, stocks: 60, bonds: 20 },
       lastSavedAt: null
     },
     groups: [
@@ -59,9 +58,25 @@ export function createDefaultConfig() {
   }
 }
 
+export function normalizeAccountItem(input = {}) {
+  const item = { ...input }
+  const behavior = ['manual', 'foreign', 'cash', 'liability'].includes(item.behavior) ? item.behavior : 'manual'
+  const foreign = behavior === 'foreign'
+  item.behavior = behavior
+  item.assetClass = behavior === 'liability' ? 'liability' : foreign ? 'foreign' : 'cash'
+  item.includeInAssets = behavior !== 'liability'
+  item.liquidity = behavior === 'liability' ? 'locked' : behavior === 'cash' ? 'available' : item.liquidity === 'locked' ? 'locked' : 'available'
+  item.currency = foreign ? (item.currency || 'USD') : 'TWD'
+  item.exchangeRate = foreign ? Number(item.exchangeRate || 0) : 1
+  delete item.assetClassDetail
+  return item
+}
+
 export function normalizeConfig(input) {
   const defaults = createDefaultConfig()
   if (!input || typeof input !== 'object' || Array.isArray(input)) return defaults
+  const currentSettings = { ...(input.settings || {}) }
+  delete currentSettings.allocationTargets
   const groups = (Array.isArray(input.groups) ? input.groups : defaults.groups).map((group) => ({ ...group }))
   let cashGroup = groups.find((group) => group.id === SYSTEM_CASH_GROUP_ID)
   const usesLegacyDefaultOrder = Number(input.version || 0) < CONFIG_VERSION
@@ -82,12 +97,7 @@ export function normalizeConfig(input) {
     }
   }
 
-  const items = (Array.isArray(input.items) ? input.items : defaults.items).map((item) => ({
-    ...item,
-    currency: item.currency || 'TWD',
-    exchangeRate: item.currency && item.currency !== 'TWD' ? Number(item.exchangeRate || 0) : 1,
-    assetClass: item.behavior === 'foreign' ? 'foreign' : item.assetClass
-  }))
+  const items = (Array.isArray(input.items) ? input.items : defaults.items).map(normalizeAccountItem)
   let cashItem = items.find((item) => item.id === SYSTEM_CASH_ITEM_ID)
   if (!cashItem) {
     cashItem = createSystemCashItem()
@@ -112,8 +122,7 @@ export function normalizeConfig(input) {
     version: CONFIG_VERSION,
     settings: {
       ...defaults.settings,
-      ...(input.settings || {}),
-      allocationTargets: { ...defaults.settings.allocationTargets, ...(input.settings?.allocationTargets || {}) }
+      ...currentSettings
     },
     groups,
     items,
@@ -127,10 +136,22 @@ export function normalizeConfig(input) {
       occurrenceMonth: Math.min(12, Math.max(1, Math.trunc(Number(item.occurrenceMonth || 1)))),
       order: Number.isFinite(Number(item.order)) ? Number(item.order) : index
     })),
-    holdings: (Array.isArray(input.holdings) ? input.holdings : []).map((holding, index) => ({
-      ...holding,
-      order: Number.isFinite(Number(holding.order)) ? Number(holding.order) : index
-    })),
+    holdings: (Array.isArray(input.holdings) ? input.holdings : []).map((holding, index) => {
+      const currentHolding = { ...holding }
+      const leverageInput = Number(currentHolding.leverage ?? currentHolding.multiplier)
+      const inverse = currentHolding.direction === 'inverse'
+      delete currentHolding.multiplier
+      delete currentHolding.direction
+      delete currentHolding.includeInAssets
+      delete currentHolding.assetClassDetail
+      const leverage = Number.isFinite(leverageInput) ? Math.trunc(leverageInput) : 1
+      return {
+        ...currentHolding,
+        assetClass: currentHolding.assetClass === 'bond' ? 'bond' : 'equity',
+        leverage: inverse ? -Math.abs(leverage) : leverage,
+        order: Number.isFinite(Number(holding.order)) ? Number(holding.order) : index
+      }
+    }),
     snapshots: Array.isArray(input.snapshots) ? input.snapshots : [],
     market: {
       ...defaults.market,
@@ -178,18 +199,23 @@ export function calculateRecurringCashflow(items = []) {
 
 const round = (value, digits = 2) => Number(Number(value || 0).toFixed(digits))
 const itemValue = (item) => Number(item.amount || 0) * (item.currency === 'TWD' ? 1 : Number(item.exchangeRate || 0))
-const holdingValue = (holding) => Number(holding.quantity || 0) * Number(holding.price || 0) * Number(holding.multiplier || 1)
+const holdingMarketValue = (holding) => Number(holding.quantity || 0) * Number(holding.price || 0)
+const holdingExposure = (holding) => holdingMarketValue(holding) * Number(holding.leverage ?? 1)
 
 export function calculateSummary(config) {
   const items = (config?.items || []).filter((item) => !item.archived)
   const holdings = (config?.holdings || []).filter((holding) => !holding.archived)
   const assets = items.filter((item) => item.includeInAssets && item.assetClass !== 'liability')
   const liabilities = items.filter((item) => item.assetClass === 'liability')
-  const includedHoldings = holdings.filter((holding) => holding.includeInAssets)
-  const totalAssets = assets.reduce((sum, item) => sum + itemValue(item), 0) + includedHoldings.reduce((sum, holding) => sum + holdingValue(holding), 0)
+  const includedHoldings = holdings
+  const totalAssets = assets.reduce((sum, item) => sum + itemValue(item), 0) + includedHoldings.reduce((sum, holding) => sum + holdingMarketValue(holding), 0)
   const totalLiabilities = liabilities.reduce((sum, item) => sum + Math.abs(itemValue(item)), 0)
-  const totalStocks = includedHoldings.filter((holding) => holding.assetClass === 'equity').reduce((sum, holding) => sum + holdingValue(holding), 0)
-  const totalBonds = includedHoldings.filter((holding) => holding.assetClass === 'bond').reduce((sum, holding) => sum + holdingValue(holding), 0)
+  const stockHoldings = includedHoldings.filter((holding) => holding.assetClass === 'equity')
+  const bondHoldings = includedHoldings.filter((holding) => holding.assetClass === 'bond')
+  const totalStocks = stockHoldings.reduce((sum, holding) => sum + holdingMarketValue(holding), 0)
+  const totalBonds = bondHoldings.reduce((sum, holding) => sum + holdingMarketValue(holding), 0)
+  const totalStockExposure = stockHoldings.reduce((sum, holding) => sum + holdingExposure(holding), 0)
+  const totalBondExposure = bondHoldings.reduce((sum, holding) => sum + holdingExposure(holding), 0)
   const totalCash = assets.filter((item) => item.assetClass === 'cash').reduce((sum, item) => sum + itemValue(item), 0)
   const totalForeign = assets.filter((item) => item.assetClass === 'foreign').reduce((sum, item) => sum + itemValue(item), 0)
   const availableAssets = assets.filter((item) => item.liquidity === 'available').reduce((sum, item) => sum + itemValue(item), 0)
@@ -204,6 +230,8 @@ export function calculateSummary(config) {
     availableCash: round(availableCash), restrictedCash: round(restrictedCash),
     totalStocks: round(totalStocks), stockRatio: totalAssets ? round(totalStocks / totalAssets, 6) : 0,
     totalBonds: round(totalBonds), bondRatio: totalAssets ? round(totalBonds / totalAssets, 6) : 0,
+    totalStockExposure: round(totalStockExposure), totalBondExposure: round(totalBondExposure),
+    totalInvestmentExposure: round(totalStockExposure + totalBondExposure),
     totalCash: round(totalCash), totalForeign: round(totalForeign),
     totalOther: round(Math.max(0, totalAssets - totalStocks - totalBonds - totalCash - totalForeign))
   }

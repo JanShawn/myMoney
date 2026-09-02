@@ -209,23 +209,23 @@ function formatBytes(bytes) {
 
 <style scoped>
 .settings-section { margin-top: 18px; }
-.danger-zone { border-color: #edcbc7; }
+.danger-zone { border-color: var(--danger-border); }
 .danger-zone :deep(.panel__action) { color: var(--danger); }
 .danger-zone__description { margin: 0 0 12px; color: var(--muted); font-size: .78rem; line-height: 1.55; }
 .storage-panel :deep(.panel__header) { flex-wrap: wrap; }
 .storage-panel :deep(.panel__body) { display: grid; gap: 14px; }
 .storage-status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr)); gap: 12px; }
 .storage-status-card { min-height: 104px; display: grid; grid-template-columns: 42px minmax(0, 1fr) 20px; align-items: start; gap: 12px; padding: 15px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-muted); }
-.storage-status-card--browser, .storage-status-card--current { background: linear-gradient(145deg, var(--primary-soft), var(--surface)); border-color: #bcded7; }
-.storage-status-card--pending { background: #fffaf0; border-color: #ead6a8; }
+.storage-status-card--browser, .storage-status-card--current { background: linear-gradient(145deg, var(--primary-soft), var(--surface)); border-color: var(--notice-border); }
+.storage-status-card--pending { background: var(--warning-soft); border-color: var(--warning-border); }
 .storage-status-card__icon { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 12px; background: var(--surface); color: var(--primary); box-shadow: 0 3px 10px rgba(19, 72, 66, .06); }
 .storage-status-card__copy { min-width: 0; }
 .storage-status-card strong, .storage-status-card span { display: block; }
 .storage-status-card strong { font-size: .86rem; line-height: 1.4; }
 .storage-status-card span { margin-top: 5px; overflow-wrap: anywhere; color: var(--muted); font-size: .73rem; line-height: 1.5; }
 .storage-status-card__state { margin-top: 10px; color: var(--primary); }
-.storage-status-card--pending .storage-status-card__state { color: #b7791f; }
-.pill-warning { background: #fff3d9; color: #9a6718; }
+.storage-status-card--pending .storage-status-card__state { color: var(--warning); }
+.pill-warning { background: var(--warning-soft); color: var(--warning); }
 .pending-change-list { display: grid; gap: 4px; margin: 0; padding-left: 18px; overflow-wrap: anywhere; }
 .backup-actions { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr); gap: 10px; }
 .backup-action-note { margin: 0; overflow-wrap: anywhere; color: var(--muted); font-size: .72rem; line-height: 1.5; }
