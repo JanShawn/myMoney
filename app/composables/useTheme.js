@@ -1,4 +1,4 @@
-const STORAGE_KEY = 'mymoney-color-theme'
+export const THEME_STORAGE_KEY = 'mymoney-color-theme'
 
 export function useTheme() {
   const theme = useState('color-theme', () => 'light')
@@ -9,7 +9,11 @@ export function useTheme() {
     theme.value = nextTheme
     if (!import.meta.client) return
     document.documentElement.dataset.theme = nextTheme
-    window.localStorage.setItem(STORAGE_KEY, nextTheme)
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, nextTheme)
+    } catch {
+      // 隱私模式或瀏覽器禁止儲存時，仍保留本次頁面的主題切換。
+    }
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', nextTheme === 'dark' ? '#0b1414' : '#0f766e')
   }
 

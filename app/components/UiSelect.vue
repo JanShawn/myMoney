@@ -132,7 +132,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .ui-select { position: relative; min-width: 0; }
-.ui-select__trigger { width: 100%; min-height: 46px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 11px 10px 13px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); cursor: pointer; text-align: left; transition: border-color .18s, box-shadow .18s, background .18s; }
+.ui-select__trigger { width: 100%; min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px 8px 11px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); cursor: pointer; text-align: left; transition: border-color .18s, box-shadow .18s, background .18s; }
 .ui-select__trigger:hover:not(:disabled) { border-color: var(--control-hover-border); background: var(--surface-hover); }
 .ui-select__trigger:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--control-ring); }
 .ui-select__value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

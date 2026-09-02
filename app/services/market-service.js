@@ -1,5 +1,6 @@
 const TWSE_STOCK_URL = 'https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL'
 const TWSE_INDEX_URL = 'https://openapi.twse.com.tw/v1/exchangeReport/MI_INDEX'
+const TWSE_MARKET_HISTORY_URL = 'https://www.twse.com.tw/exchangeReport/FMTQIK?response=json'
 const TPEX_STOCK_URL = 'https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes'
 const FINMIND_PRICE_URL = 'https://api.finmindtrade.com/api/v4/data'
 const LOCAL_CATALOG_URL = '/data/market-instruments.json'
@@ -14,8 +15,8 @@ const toNumber = (value) => {
   return Number.isFinite(number) ? number : null
 }
 
-async function fetchJson(url) {
-  const response = await fetch(url, { signal: AbortSignal.timeout(8000), headers: { accept: 'application/json' } })
+async function fetchJson(url, options = {}) {
+  const response = await fetch(url, { signal: AbortSignal.timeout(8000), headers: { accept: 'application/json' }, ...options })
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
   return response.json()
 }
@@ -23,7 +24,34 @@ async function fetchJson(url) {
 const toMarketDate = (value) => {
   const raw = String(value || '').trim()
   if (/^\d{7}$/.test(raw)) return `${Number(raw.slice(0, 3)) + 1911}-${raw.slice(3, 5)}-${raw.slice(5, 7)}`
+  if (/^\d{8}$/.test(raw)) return `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`
+  const slashDate = raw.match(/^(\d{3,4})\/(\d{2})\/(\d{2})$/)
+  if (slashDate) return `${Number(slashDate[1]) < 1911 ? Number(slashDate[1]) + 1911 : slashDate[1]}-${slashDate[2]}-${slashDate[3]}`
   return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : null
+}
+
+const normalizeMarketHistory = (rows = []) => rows
+  .map((row) => ({
+    date: toMarketDate(Array.isArray(row) ? row[0] : row?.Date ?? row?.日期 ?? row?.date),
+    close: toNumber(Array.isArray(row) ? row[4] : row?.TAIEX ?? row?.收盤指數 ?? row?.ClosingIndex ?? row?.close)
+  }))
+  .filter((row) => row.date && row.close != null)
+  .sort((left, right) => left.date.localeCompare(right.date))
+
+async function fetchLatestTaiexHistory() {
+  try {
+    const payload = await fetchJson(TWSE_MARKET_HISTORY_URL, { cache: 'no-store' })
+    const history = normalizeMarketHistory(Array.isArray(payload) ? payload : payload?.data)
+    if (history.length) return history
+  } catch {
+    // 官網月資料若暫時不可用，改讀 OpenAPI 的最新大盤統計。
+  }
+
+  const indices = await fetchJson(TWSE_INDEX_URL, { cache: 'no-store' })
+  const candidate = indices.find((entry) => String(entry.指數 || entry.Index || entry.Name || '').includes('發行量加權'))
+  const history = normalizeMarketHistory(candidate ? [candidate] : [])
+  if (!history.length) throw new Error('證交所沒有回傳可用的加權指數。')
+  return history
 }
 
 const taipeiDate = (date) => new Intl.DateTimeFormat('sv-SE', {
@@ -204,24 +232,24 @@ export async function fetchMarketPreview(tickers = []) {
   } catch {
     warnings.push('瀏覽器無法取得上市／上櫃收盤價，已保留手動價格。')
   }
-  let localMarket = null
-  try {
-    localMarket = await fetchJson(LOCAL_MARKET_URL)
-  } catch {
-    // 沒有本機快取時，才使用下方的證交所線上端點作為備援。
-  }
-  if (localMarket) {
-    taiex = toNumber(localMarket?.taiex)
-  } else {
-    try {
-      const indices = await fetchJson(TWSE_INDEX_URL)
-      const candidate = indices.find((entry) => String(entry.指數 || entry.Index || entry.Name || '').includes('發行量加權'))
-      taiex = toNumber(candidate?.收盤指數 || candidate?.ClosingIndex || candidate?.ClosingPrice)
-    } catch {
-      taiex = null
-    }
-  }
-  const ma240 = toNumber(localMarket?.ma240)
+  const [localMarketResult, onlineMarketResult] = await Promise.allSettled([
+    fetchJson(LOCAL_MARKET_URL),
+    fetchLatestTaiexHistory()
+  ])
+  const localMarket = localMarketResult.status === 'fulfilled' ? localMarketResult.value : null
+  const onlineHistory = onlineMarketResult.status === 'fulfilled' ? onlineMarketResult.value : []
+  const mergedHistory = new Map()
+  for (const row of normalizeMarketHistory(localMarket?.history || [])) mergedHistory.set(row.date, row.close)
+  for (const row of onlineHistory) mergedHistory.set(row.date, row.close)
+  const marketHistory = [...mergedHistory].map(([date, close]) => ({ date, close })).sort((left, right) => left.date.localeCompare(right.date))
+  const latestOnline = onlineHistory.at(-1)
+  const latestKnown = marketHistory.at(-1)
+  taiex = latestKnown?.close ?? toNumber(localMarket?.taiex)
+  const recent240 = marketHistory.slice(-240)
+  const ma240 = recent240.length >= 240
+    ? Math.round((recent240.reduce((total, row) => total + row.close, 0) / recent240.length) * 100) / 100
+    : toNumber(localMarket?.ma240)
+  if (onlineMarketResult.status === 'rejected' && localMarket) warnings.push(`無法取得證交所最新大盤資料，暫時使用 ${localMarket.asOfDate || '本機'} 快取。`)
   if (taiex == null) warnings.push('證交所線上資料與本機官方快取都沒有可用的加權指數。')
   if (ma240 == null) warnings.push('本機官方快取沒有足夠的 240 個交易日，無法計算 240MA。')
   return {
@@ -231,9 +259,9 @@ export async function fetchMarketPreview(tickers = []) {
     yahooUrls,
     taiex,
     ma240,
-    asOfDate: localMarket?.asOfDate || null,
+    asOfDate: latestKnown?.date || localMarket?.asOfDate || null,
     fetchedAt: new Date().toISOString(),
-    source: localMarket ? '臺灣證券交易所 FMTQIK 官方資料快取' : 'TWSE OpenAPI',
+    source: latestOnline && latestOnline.date === latestKnown?.date ? '臺灣證券交易所 FMTQIK 最新交易日資料' : '臺灣證券交易所 FMTQIK 官方資料快取',
     warnings
   }
 }

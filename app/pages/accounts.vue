@@ -12,6 +12,8 @@ const pendingDeleteGroupId = ref('')
 const pendingDeleteItemId = ref('')
 const draggingItemId = ref('')
 const dragOverGroupId = ref('')
+const dragOverItemId = ref('')
+const dragOverPlacement = ref('after')
 const fx = reactive({ loading: false, message: '', error: '' })
 const behaviorLabels = { manual: '台幣帳戶', foreign: '外幣帳戶', cash: '系統現金', liability: '負債' }
 const liquidityLabels = { available: '立即可用', locked: '受限制' }
@@ -200,7 +202,8 @@ async function confirmDeleteItem(item) {
     showToast({ tone: 'error', title: '刪除沒有完成', message: `「${item.name}」：${error?.message || '無法儲存資料。'}` })
   }
 }
-const itemsFor = (groupId) => store.config?.items?.filter((item) => item.groupId === groupId && !item.archived) || []
+const itemsFor = (groupId) => [...(store.config?.items?.filter((item) => item.groupId === groupId && !item.archived) || [])]
+  .sort((left, right) => Number(left.order || 0) - Number(right.order || 0))
 const allItemsFor = (groupId) => store.config?.items?.filter((item) => item.groupId === groupId) || []
 
 function startItemDrag(item, event) {
@@ -216,14 +219,17 @@ function startItemDrag(item, event) {
 function finishItemDrag() {
   draggingItemId.value = ''
   dragOverGroupId.value = ''
+  dragOverItemId.value = ''
+  dragOverPlacement.value = 'after'
 }
 
 function dragItemOverGroup(group, event) {
   const item = store.config?.items?.find((entry) => entry.id === draggingItemId.value)
-  if (!item || item.system || item.groupId === group.id) return
+  if (!item || item.system) return
   event.preventDefault()
   event.dataTransfer.dropEffect = 'move'
   dragOverGroupId.value = group.id
+  dragOverItemId.value = ''
 }
 
 async function dropItemIntoGroup(group, event) {
@@ -231,11 +237,39 @@ async function dropItemIntoGroup(group, event) {
   const itemId = draggingItemId.value || event.dataTransfer.getData('text/plain')
   const item = store.config?.items?.find((entry) => entry.id === itemId)
   finishItemDrag()
-  if (!item || item.system || item.groupId === group.id) return
+  if (!item || item.system) return
   try {
-    await store.updateItem(item.id, { groupId: group.id })
+    await store.moveItem(item.id, group.id)
     if (editing.value?.id === item.id) editing.value.groupId = group.id
-    showToast({ tone: 'success', title: '帳戶已移動', message: `已將「${item.name}」移至「${group.name}」。`, duration: 2500 })
+    showToast({ tone: 'success', title: '帳戶順序已更新', message: `「${item.name}」已移至「${group.name}」的最後一列。`, duration: 2500 })
+  } catch (error) {
+    store.error = ''
+    showToast({ tone: 'error', title: '帳戶移動失敗', message: error?.message || '無法儲存資料。' })
+  }
+}
+
+function dragItemOverItem(target, event) {
+  const item = store.config?.items?.find((entry) => entry.id === draggingItemId.value)
+  if (!item || item.system || item.id === target.id) return
+  event.preventDefault()
+  event.dataTransfer.dropEffect = 'move'
+  const bounds = event.currentTarget.getBoundingClientRect()
+  dragOverGroupId.value = target.groupId
+  dragOverItemId.value = target.id
+  dragOverPlacement.value = target.system || event.clientY >= bounds.top + bounds.height / 2 ? 'after' : 'before'
+}
+
+async function dropItemOnItem(target, event) {
+  event.preventDefault()
+  const itemId = draggingItemId.value || event.dataTransfer.getData('text/plain')
+  const item = store.config?.items?.find((entry) => entry.id === itemId)
+  const placement = dragOverPlacement.value
+  finishItemDrag()
+  if (!item || item.system || item.id === target.id) return
+  try {
+    await store.moveItem(item.id, target.groupId, target.id, placement)
+    if (editing.value?.id === item.id) editing.value.groupId = target.groupId
+    showToast({ tone: 'success', title: '帳戶順序已更新', message: `「${item.name}」已放到「${target.name}」${placement === 'before' ? '上方' : '下方'}。`, duration: 2500 })
   } catch (error) {
     store.error = ''
     showToast({ tone: 'error', title: '帳戶移動失敗', message: error?.message || '無法儲存資料。' })
@@ -245,7 +279,7 @@ async function dropItemIntoGroup(group, event) {
 
 <template>
   <div>
-    <PageHeader eyebrow="Account architecture" title="帳戶結構" description="先用群組整理帳戶；拖曳一般帳戶即可移到其他群組，外幣會統一換算成台幣後統計。" />
+    <PageHeader eyebrow="Account architecture" title="帳戶結構" description="拖曳一般帳戶可調整群組內順序，也能直接移到其他群組；外幣會統一換算成台幣後統計。" />
 
     <div class="page-grid page-grid--form-list">
       <div class="stack">
@@ -338,12 +372,19 @@ async function dropItemIntoGroup(group, event) {
                 v-for="item in itemsFor(group.id)"
                 :key="item.id"
                 class="data-row account-row"
-                :class="{ 'account-row--dragging': draggingItemId === item.id, 'account-row--draggable': !item.system }"
+                :class="{
+                  'account-row--dragging': draggingItemId === item.id,
+                  'account-row--draggable': !item.system,
+                  'account-row--drop-before': dragOverItemId === item.id && dragOverPlacement === 'before',
+                  'account-row--drop-after': dragOverItemId === item.id && dragOverPlacement === 'after'
+                }"
                 :draggable="!item.system"
                 @dragstart="startItemDrag(item, $event)"
                 @dragend="finishItemDrag"
+                @dragover.stop="dragItemOverItem(item, $event)"
+                @drop.stop="dropItemOnItem(item, $event)"
               >
-                <span class="account-drag-handle" :title="item.system ? '系統帳戶不能移動' : '拖曳到其他群組'"><Lock v-if="item.system" :size="16" /><GripVertical v-else :size="18" /></span>
+                <span class="account-drag-handle" :title="item.system ? '系統帳戶不能移動' : '拖曳調整上下順序或移到其他群組'"><Lock v-if="item.system" :size="16" /><GripVertical v-else :size="18" /></span>
                 <div class="data-row__main"><div class="data-row__title">{{ item.name }}</div><div class="data-row__meta">{{ behaviorLabels[item.behavior] }} · {{ item.currency }} · {{ liquidityLabels[item.liquidity] }}<template v-if="item.currency !== 'TWD'"> · {{ foreignMoney(item.amount, item.currency) }}</template></div></div>
                 <div class="data-row__value">{{ twdMoney(convertedAmount(item)) }}</div>
                 <div class="data-row__actions">
@@ -365,24 +406,27 @@ async function dropItemIntoGroup(group, event) {
 .group-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; }
 .group-header { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 18px 24px; }
 .group-header__copy { min-width: 0; }
-.group-header__copy span { display: block; margin-top: 3px; color: var(--muted); font-size: .73rem; }
+.group-header__copy span { display: block; margin-top: 3px; color: var(--muted); font-size: .78rem; }
 .group-name { width: 100%; padding: 0; border: 0; background: transparent; color: var(--text); font-size: 1rem; font-weight: 760; }
 .group-name:focus { outline: 0; box-shadow: 0 2px 0 var(--primary); }
 .system-group-name { display: flex; align-items: center; gap: 7px; color: var(--text); font-size: 1rem; font-weight: 760; }
 .locked-field { min-height: 46px; display: flex; align-items: center; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-muted); color: var(--muted); font-size: .84rem; font-weight: 700; }
-.account-row { grid-template-columns: 28px minmax(0, 1.5fr) minmax(130px, .7fr) 80px; }
+.account-row { position: relative; grid-template-columns: 28px minmax(0, 1.5fr) minmax(130px, .7fr) 80px; }
 .account-row--draggable { cursor: grab; }
 .account-row--draggable:active { cursor: grabbing; }
 .account-row--dragging { opacity: .45; }
+.account-row--drop-before::before, .account-row--drop-after::after { content: ""; position: absolute; z-index: 2; right: 12px; left: 12px; height: 3px; border-radius: 999px; background: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
+.account-row--drop-before::before { top: -2px; }
+.account-row--drop-after::after { bottom: -2px; }
 .account-drag-handle { display: grid; place-items: center; color: var(--muted); }
 .group-drop-panel { transition: border-color .16s ease, box-shadow .16s ease, background-color .16s ease; }
 .group-drop-panel--active { border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 16%, transparent); background: color-mix(in srgb, var(--primary) 4%, var(--surface)); }
 .exchange-preview { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-muted); }
 .exchange-preview > div { display: grid; gap: 3px; min-width: 0; }
-.exchange-preview span, .exchange-preview small { color: var(--muted); font-size: .74rem; }
+.exchange-preview span, .exchange-preview small { color: var(--muted); font-size: .78rem; }
 .exchange-preview strong { color: var(--text); font-size: .95rem; }
 .exchange-preview .btn { flex: 0 0 auto; }
-.fx-attribution { margin: 0; color: var(--muted); font-size: .7rem; line-height: 1.5; }
+.fx-attribution { margin: 0; color: var(--muted); font-size: .76rem; line-height: 1.5; }
 .fx-attribution a { color: var(--primary); }
 .danger-action { color: var(--danger); }
 .group-delete-notice { margin: 0 24px 16px; }

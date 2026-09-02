@@ -8,7 +8,7 @@ describe('GitHub 範例資料', () => {
   it('可以載入完整功能所需的資料', () => {
     const config = normalizeConfig(demoData)
 
-    expect(config.version).toBe(6)
+    expect(config.version).toBe(7)
     expect(config.items).toHaveLength(8)
     expect(config.holdings).toHaveLength(3)
     expect(config.recurringCashflowItems).toHaveLength(6)

@@ -226,13 +226,13 @@ const money = (value) => new Intl.NumberFormat('zh-TW', { style: 'currency', cur
 .result-panel { position: sticky; top: 24px; }
 .reconciled-time { display: flex; align-items: center; gap: 10px; margin: 2px 0 16px; padding: 12px 13px; border-radius: 12px; background: var(--surface-muted); color: var(--primary); }
 .reconciled-time > div { display: grid; gap: 2px; }
-.reconciled-time span { color: var(--muted); font-size: .7rem; }
+.reconciled-time span { color: var(--muted); font-size: .76rem; }
 .reconciled-time strong { color: var(--text); font-size: .8rem; line-height: 1.4; }
 .baseline-card { display: grid; grid-template-columns: minmax(0, 1fr) minmax(160px, .52fr); align-items: center; gap: 22px; padding: 18px; border: 1px solid var(--notice-border); border-radius: var(--radius-md); background: linear-gradient(135deg, var(--notice-bg), var(--surface-hover)); }
 .baseline-card > div { display: grid; gap: 4px; }
-.baseline-card__eyebrow { color: var(--primary); font-size: .68rem; font-weight: 780; letter-spacing: .09em; text-transform: uppercase; }
+.baseline-card__eyebrow { color: var(--primary); font-size: .75rem; font-weight: 780; letter-spacing: .09em; text-transform: uppercase; }
 .baseline-card label { color: var(--text); font-size: .94rem; font-weight: 750; }
-.baseline-card small { color: var(--muted); font-size: .74rem; line-height: 1.5; }
+.baseline-card small { color: var(--muted); font-size: .78rem; line-height: 1.5; }
 .baseline-card__input { min-height: 52px; font-size: 1.3rem; font-weight: 780; }
 .detail-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
 .detail-heading h3 { margin: 0; font-size: 1rem; }
@@ -240,7 +240,7 @@ const money = (value) => new Intl.NumberFormat('zh-TW', { style: 'currency', cur
 .detail-heading strong { flex: 0 0 auto; font-size: 1.35rem; font-variant-numeric: tabular-nums; }
 .comparison-summary { margin: 4px 0 18px; }
 .comparison-result { display: grid; gap: 5px; padding: 18px; border: 1px solid var(--border); border-radius: 15px; background: var(--surface-muted); }
-.comparison-result > span { color: var(--muted); font-size: .72rem; font-weight: 720; }
+.comparison-result > span { color: var(--muted); font-size: .77rem; font-weight: 720; }
 .comparison-result > strong { color: var(--text); font-size: 1.45rem; letter-spacing: -.025em; }
 .comparison-result > small { color: var(--muted); font-size: .76rem; line-height: 1.45; }
 .comparison-result--success { border-color: var(--success-border); background: var(--success-soft); }

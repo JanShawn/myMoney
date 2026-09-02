@@ -403,7 +403,7 @@ async function confirmDeleteHolding(holding) {
 .create-form-actions .btn { width: 100%; }
 .holding-options { overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-muted); }
 .holding-options__title { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 13px; color: var(--text-soft); font-size: .76rem; font-weight: 760; }
-.holding-options__title small { color: var(--muted); font-size: .66rem; font-weight: 650; }
+.holding-options__title small { color: var(--muted); font-size: .75rem; font-weight: 650; }
 .holding-options__body { display: grid; grid-template-columns: 1fr; gap: 13px; padding: 12px 13px 13px; border-top: 1px solid var(--border); }
 .holding-options__body .field { padding-top: 0; }
 .holding-header-summary { display: flex; align-items: center; justify-content: flex-end; gap: 7px; flex-wrap: wrap; }
@@ -411,11 +411,11 @@ async function confirmDeleteHolding(holding) {
 .holding-search { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; color: var(--muted); }
 .holding-search input { width: 100%; min-width: 0; padding: 5px 0; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; font-size: .82rem; }
 .holding-sort { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 2px; padding: 3px; border-radius: 10px; background: var(--surface-muted); }
-.holding-sort > span { padding: 0 5px; color: var(--muted); font-size: .67rem; font-weight: 700; }
-.holding-sort button { min-height: 27px; padding: 3px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; font: inherit; font-size: .7rem; font-weight: 700; }
+.holding-sort > span { padding: 0 5px; color: var(--muted); font-size: .75rem; font-weight: 700; }
+.holding-sort button { min-height: 29px; padding: 3px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; font: inherit; font-size: .75rem; font-weight: 700; }
 .holding-sort button:hover { color: var(--text); }
 .holding-sort button.active { background: var(--surface); color: var(--primary); box-shadow: var(--shadow-xs); }
-.holding-result-count { flex: 0 0 auto; color: var(--muted); font-size: .72rem; font-weight: 700; }
+.holding-result-count { flex: 0 0 auto; color: var(--muted); font-size: .76rem; font-weight: 700; }
 .holding-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 10px; padding: 0 12px 12px; }
 .holding-card { display: grid; align-content: start; gap: 11px; min-width: 0; padding: 13px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); cursor: pointer; transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease; }
 .holding-card:hover { border-color: color-mix(in srgb, var(--primary) 28%, var(--border)); box-shadow: var(--shadow-xs); transform: translateY(-1px); }
@@ -424,31 +424,31 @@ async function confirmDeleteHolding(holding) {
 .holding-identity { min-width: 0; }
 .holding-code-line { display: flex; align-items: center; gap: 7px; }
 .holding-code { color: var(--primary); font-size: .76rem; font-weight: 780; letter-spacing: .03em; }
-.holding-price-source { color: var(--muted); font-size: .65rem; font-weight: 700; }
+.holding-price-source { color: var(--muted); font-size: .75rem; font-weight: 700; }
 .holding-name { margin: 5px 0 0; color: var(--text); font-size: .94rem; line-height: 1.42; font-weight: 760; overflow-wrap: anywhere; }
-.holding-meta { margin-top: 4px; color: var(--muted); font-size: .7rem; line-height: 1.4; }
+.holding-meta { margin-top: 4px; color: var(--muted); font-size: .76rem; line-height: 1.4; }
 .holding-market-value { display: grid; gap: 2px; padding: 10px 11px; border-radius: 11px; background: var(--primary-soft); }
-.holding-market-value span { color: var(--muted); font-size: .65rem; font-weight: 700; }
+.holding-market-value span { color: var(--muted); font-size: .75rem; font-weight: 700; }
 .holding-market-value strong { color: var(--primary); font-size: 1.04rem; font-variant-numeric: tabular-nums; }
 .holding-summary-values { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; min-width: 0; }
 .holding-summary-values > div { display: grid; justify-items: start; min-width: 0; }
-.holding-summary-values span { color: var(--muted); font-size: .65rem; font-weight: 700; }
+.holding-summary-values span { color: var(--muted); font-size: .75rem; font-weight: 700; }
 .holding-summary-values strong { max-width: 100%; color: var(--text); font-size: .79rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .quote-action { color: var(--primary); }
 .delete-action { color: var(--danger); }
 .confirm-actions { display: flex; gap: 8px; }
 .holding-edit-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: 8px; padding: 10px; border-radius: var(--radius-md); background: var(--surface-muted); }
 .holding-compact-field { display: grid; gap: 4px; min-width: 0; }
-.holding-edit-fields label { color: var(--muted); font-size: .68rem; font-weight: 700; }
+.holding-edit-fields label { color: var(--muted); font-size: .75rem; font-weight: 700; }
 .holding-edit-fields .input { min-height: 40px; padding-block: 7px; }
 .holding-editor-status { display: flex; grid-column: 1 / -1; align-items: center; min-height: 24px; }
-.holding-editor-status span { color: var(--muted); font-size: .7rem; }
+.holding-editor-status span { color: var(--muted); font-size: .76rem; }
 .lookup-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
 .lookup-row .btn { white-space: nowrap; }
 .instrument-result { display: flex; align-items: flex-start; gap: 10px; padding: 11px 12px; border: 1px solid color-mix(in srgb, var(--success) 32%, transparent); border-radius: var(--radius-md); background: color-mix(in srgb, var(--success) 8%, var(--surface)); color: var(--success); }
 .instrument-result div { display: grid; gap: 3px; }
 .instrument-result strong { color: var(--text); line-height: 1.4; overflow-wrap: anywhere; }
-.instrument-result span { color: var(--muted); font-size: .72rem; line-height: 1.45; }
+.instrument-result span { color: var(--muted); font-size: .77rem; line-height: 1.45; }
 .instrument-result a, .quote-link { color: var(--primary); text-decoration: none; }
 .instrument-result a:hover, .quote-link:hover { text-decoration: underline; }
 .spin { animation: spin .8s linear infinite; }

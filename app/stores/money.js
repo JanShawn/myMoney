@@ -107,7 +107,10 @@ export const useMoneyStore = defineStore('money', () => {
   })
 
   const addItem = (body) => mutate((draft) => {
-    const item = normalizeAccountItem({ id: crypto.randomUUID(), ...body, archived: false })
+    const nextOrder = draft.items
+      .filter((item) => item.groupId === body.groupId && !item.archived)
+      .reduce((highest, item) => Math.max(highest, Number(item.order ?? -1)), -1) + 1
+    const item = normalizeAccountItem({ id: crypto.randomUUID(), ...body, order: nextOrder, archived: false })
     draft.items.push(item)
     return item
   })
@@ -117,9 +120,45 @@ export const useMoneyStore = defineStore('money', () => {
     if (!item) throw new Error('找不到這個項目')
     if (id === SYSTEM_CASH_ITEM_ID && body.archived === true) throw new Error('「身上現金」與現金驗算連動，不能封存。')
     if (id === SYSTEM_CASH_ITEM_ID && body.groupId && body.groupId !== SYSTEM_CASH_GROUP_ID) throw new Error('系統現金帳戶必須保留在「現金」群組。')
-    Object.assign(item, body)
+    const changes = { ...body }
+    if (changes.groupId && changes.groupId !== item.groupId && !('order' in changes)) {
+      changes.order = draft.items
+        .filter((entry) => entry.id !== id && entry.groupId === changes.groupId && !entry.archived)
+        .reduce((highest, entry) => Math.max(highest, Number(entry.order ?? -1)), -1) + 1
+    }
+    Object.assign(item, changes)
     Object.assign(item, normalizeAccountItem(item))
     if (id === SYSTEM_CASH_ITEM_ID) Object.assign(item, { groupId: SYSTEM_CASH_GROUP_ID, behavior: 'cash', assetClass: 'cash', liquidity: 'available', includeInAssets: true, currency: 'TWD', exchangeRate: 1, archived: false, system: true })
+    return item
+  })
+
+  const moveItem = (id, targetGroupId, targetId = null, placement = 'after') => mutate((draft) => {
+    const item = draft.items.find((entry) => entry.id === id)
+    const targetGroup = draft.groups.find((entry) => entry.id === targetGroupId && !entry.archived)
+    if (!item || item.archived) throw new Error('找不到要排序的帳戶。')
+    if (item.system) throw new Error('系統帳戶不能移動。')
+    if (!targetGroup) throw new Error('找不到要移入的群組。')
+    if (targetId === id) return item
+
+    const sourceGroupId = item.groupId
+    const targetItems = draft.items
+      .filter((entry) => !entry.archived && entry.groupId === targetGroupId && entry.id !== id)
+      .sort((left, right) => Number(left.order || 0) - Number(right.order || 0))
+    let insertionIndex = targetItems.length
+    if (targetId) {
+      const targetIndex = targetItems.findIndex((entry) => entry.id === targetId)
+      if (targetIndex >= 0) insertionIndex = targetIndex + (placement === 'before' ? 0 : 1)
+    }
+    item.groupId = targetGroupId
+    targetItems.splice(insertionIndex, 0, item)
+    targetItems.forEach((entry, index) => { entry.order = index })
+
+    if (sourceGroupId !== targetGroupId) {
+      draft.items
+        .filter((entry) => !entry.archived && entry.groupId === sourceGroupId)
+        .sort((left, right) => Number(left.order || 0) - Number(right.order || 0))
+        .forEach((entry, index) => { entry.order = index })
+    }
     return item
   })
 
@@ -370,7 +409,7 @@ export const useMoneyStore = defineStore('money', () => {
   return {
     config, summary, cashflowPlan, snapshots, loading, saving, error, storageStatus,
     activeItems, activeHoldings, recurringCashflowItems, lastSnapshot,
-    load, addGroup, updateGroup, deleteGroup, addItem, updateItem, deleteItem, addHolding, updateHolding, deleteHolding, moveHolding,
+    load, addGroup, updateGroup, deleteGroup, addItem, updateItem, deleteItem, moveItem, addHolding, updateHolding, deleteHolding, moveHolding,
     updateSettings, updateCashDraft, addRecurringCashflowItem, updateRecurringCashflowItem, deleteRecurringCashflowItem, swapRecurringCashflowItems,
     lookupHolding, marketPreview, refreshExchangeRates, saveSnapshot, deleteSnapshot,
     saveJson, previewJsonImport, importJson,

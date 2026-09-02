@@ -13,7 +13,7 @@ describe('snapshot storage', () => {
 
   it('舊版資料會補上靜態架構需要的 snapshots', () => {
     const config = normalizeConfig({ version: 1, groups: [], items: [], holdings: [] })
-    expect(config.version).toBe(6)
+    expect(config.version).toBe(7)
     expect(config.snapshots).toEqual([])
     expect(config.cashDrafts).toEqual({})
     expect(config.settings.snapshotDisplayLimit).toBe(30)
@@ -77,6 +77,19 @@ describe('snapshot storage', () => {
     expect(config.items[0].assetClass).toBe('foreign')
     expect(config.items[0].exchangeRate).toBe(32)
     expect(config.market.fxRates.TWD).toBe(1)
+  })
+
+  it('舊帳戶資料會依原始順序補上可拖曳排序欄位', () => {
+    const config = normalizeConfig({
+      version: 6,
+      groups: [{ id: 'group-bank', name: '銀行', order: 0 }],
+      items: [
+        { id: 'bank-a', groupId: 'group-bank', name: 'A', amount: 1 },
+        { id: 'bank-b', groupId: 'group-bank', name: 'B', amount: 2 }
+      ]
+    })
+    const bankItems = config.items.filter((item) => item.groupId === 'group-bank')
+    expect(bankItems.map((item) => [item.id, item.order])).toEqual([['bank-a', 0], ['bank-b', 1]])
   })
 
   it('舊帳戶會依類型自動歸類，且流動性只保留立即可用與受限制', () => {

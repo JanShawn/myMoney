@@ -1,7 +1,7 @@
 export const SYSTEM_CASH_GROUP_ID = 'group-cash'
 export const SYSTEM_CASH_ITEM_ID = 'item-cash'
 
-const CONFIG_VERSION = 6
+const CONFIG_VERSION = 7
 const DEFAULT_GROUP_ORDERS = {
   [SYSTEM_CASH_GROUP_ID]: 0,
   'group-bank': 1,
@@ -28,7 +28,7 @@ const createSystemCashGroup = (order = DEFAULT_GROUP_ORDERS[SYSTEM_CASH_GROUP_ID
 const createSystemCashItem = () => ({
   id: SYSTEM_CASH_ITEM_ID, groupId: SYSTEM_CASH_GROUP_ID, name: '身上現金', behavior: 'cash',
   assetClass: 'cash', liquidity: 'available', includeInAssets: true,
-  amount: 0, currency: 'TWD', exchangeRate: 1, archived: false, system: true
+  amount: 0, currency: 'TWD', exchangeRate: 1, order: 0, archived: false, system: true
 })
 
 export function createDefaultConfig() {
@@ -58,7 +58,7 @@ export function createDefaultConfig() {
   }
 }
 
-export function normalizeAccountItem(input = {}) {
+export function normalizeAccountItem(input = {}, fallbackOrder = 0) {
   const item = { ...input }
   const behavior = ['manual', 'foreign', 'cash', 'liability'].includes(item.behavior) ? item.behavior : 'manual'
   const foreign = behavior === 'foreign'
@@ -68,6 +68,7 @@ export function normalizeAccountItem(input = {}) {
   item.liquidity = behavior === 'liability' ? 'locked' : behavior === 'cash' ? 'available' : item.liquidity === 'locked' ? 'locked' : 'available'
   item.currency = foreign ? (item.currency || 'USD') : 'TWD'
   item.exchangeRate = foreign ? Number(item.exchangeRate || 0) : 1
+  item.order = Number.isFinite(Number(item.order)) ? Number(item.order) : fallbackOrder
   delete item.assetClassDetail
   return item
 }
