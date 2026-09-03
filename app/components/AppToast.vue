@@ -28,7 +28,7 @@ const { toast, hideToast } = useToast()
 </template>
 
 <style scoped>
-.app-toast { position: fixed; z-index: 160; top: 18px; right: 18px; width: min(430px, calc(100vw - 36px)); box-shadow: var(--shadow-md); }
+.app-toast { position: fixed; z-index: 160; top: 18px; right: 18px; width: min(430px, calc(100vw - 36px)); background: var(--surface); box-shadow: var(--shadow-md); backdrop-filter: none; }
 .app-toast :deep(.notice__text) { display: grid; gap: 4px; }
 .app-toast__close { width: 30px; min-height: 30px; }
 .app-toast-enter-active, .app-toast-leave-active { transition: opacity .18s ease, transform .18s ease; }

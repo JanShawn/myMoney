@@ -7,7 +7,6 @@ const { showToast } = useToast()
 const note = ref('')
 const marketResult = ref(null)
 const marketUpdating = ref(false)
-const fxError = ref('')
 const today = () => {
   const now = new Date()
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
@@ -30,11 +29,9 @@ const otherOrRestrictedAssets = computed(() => Number(store.summary?.totalOther 
 
 async function refreshFx(force = false) {
   if (!store.activeItems.some((item) => item.behavior === 'foreign')) return
-  fxError.value = ''
   try {
     await store.refreshExchangeRates(force)
-  } catch (error) {
-    fxError.value = `外幣匯率更新失敗：${error?.message || '網路連線失敗'}。目前保留上次成功匯率。`
+  } catch {
     if (force) store.error = ''
   }
 }
@@ -43,18 +40,16 @@ watch(() => store.loading, (loading) => { if (!loading) refreshFx() }, { immedia
 
 async function refreshMarket() {
   marketUpdating.value = true
-  fxError.value = ''
   try {
     marketResult.value = await store.marketPreview()
     if (marketResult.value.taiex) taiex.value = marketResult.value.taiex
     if (marketResult.value.ma240) ma240.value = marketResult.value.ma240
     await refreshFx(true)
-    const details = [...(marketResult.value.warnings || []), fxError.value].filter(Boolean)
+    const complete = Number(marketResult.value.taiex) > 0 && Number(marketResult.value.ma240) > 0
     showToast({
-      tone: details.length ? 'warning' : 'success',
-      title: details.length ? '市場資料已部分更新' : '市場資料更新完成',
-      message: `資料日 ${marketResult.value.asOfDate || '未提供'}；加權指數 ${number(marketResult.value.taiex)}、240MA ${number(marketResult.value.ma240)}。`,
-      details
+      tone: complete ? 'success' : 'warning',
+      title: complete ? '市場資料已更新' : '市場資料更新未完整',
+      message: `資料日 ${marketResult.value.asOfDate || '未提供'}；加權指數 ${number(marketResult.value.taiex)}、240MA ${number(marketResult.value.ma240)}。`
     })
   } catch {
     // Store 會交由全站 toast 顯示具體錯誤。
