@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  calculateRecurringCashflow, normalizeConfig, recurringCashflowAnnualAmount, recurringCashflowMonthlyAmount,
+  calculateRecurringCashflow, calculateRecurringCashflowForMonth, normalizeConfig, recurringCashflowAnnualAmount, recurringCashflowMonthlyAmount,
   recurringCashflowOccurrenceMonths
 } from '../app/services/money-domain.js'
 
@@ -37,5 +37,17 @@ describe('週期收支換算', () => {
     expect(recurringCashflowOccurrenceMonths({ frequency: 'quarterly', occurrenceMonth: 2 })).toEqual([2, 5, 8, 11])
     expect(recurringCashflowOccurrenceMonths({ frequency: 'semiannual', occurrenceMonth: 11 })).toEqual([5, 11])
     expect(recurringCashflowOccurrenceMonths({ frequency: 'annual', occurrenceMonth: 9 })).toEqual([9])
+  })
+
+  it('只加總指定月份實際會發生的收支', () => {
+    const items = [
+      { type: 'income', amount: 60000, frequency: 'monthly' },
+      { type: 'income', amount: 30000, frequency: 'quarterly', occurrenceMonth: 2 },
+      { type: 'expense', amount: 18000, frequency: 'monthly' },
+      { type: 'expense', amount: 24000, frequency: 'annual', occurrenceMonth: 2 }
+    ]
+
+    expect(calculateRecurringCashflowForMonth(items, 2)).toEqual({ income: 90000, expense: 42000, netCashflow: 48000 })
+    expect(calculateRecurringCashflowForMonth(items, 3)).toEqual({ income: 60000, expense: 18000, netCashflow: 42000 })
   })
 })

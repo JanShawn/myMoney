@@ -193,12 +193,11 @@ async function refreshMarket() {
     showToast({
       tone: partial ? 'warning' : 'success',
       title: updatedCount
-        ? partial ? '收盤價已部分更新' : '收盤價更新完成'
+        ? partial ? '收盤價已部分更新' : '所有收盤價已更新'
         : '沒有可更新的收盤價',
       message: updatedCount
         ? `已取得並保存 ${updatedCount}/${total} 筆持倉的收盤價${latestDate ? `，最新收盤日 ${latestDate}` : ''}。`
-        : '這次沒有取得可用的新收盤價，原本價格已保留。',
-      details: result.warnings || []
+        : '這次沒有取得可用的新收盤價，原本價格已保留。'
     })
   } catch (error) {
     store.error = ''

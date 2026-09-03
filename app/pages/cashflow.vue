@@ -1,6 +1,6 @@
 <script setup>
-import { ArrowDownRight, ArrowUpDown, ArrowUpRight, CalendarRange, ChevronDown, GripVertical, Pencil, Plus, Trash2, WalletCards } from '@lucide/vue'
-import { recurringCashflowAnnualAmount, recurringCashflowMonthlyAmount, recurringCashflowOccurrenceMonths } from '~/services/money-domain'
+import { ArrowDownRight, ArrowUpDown, ArrowUpRight, CalendarRange, ChevronDown, GripVertical, ListChecks, Pencil, Plus, Trash2, WalletCards } from '@lucide/vue'
+import { calculateRecurringCashflow, calculateRecurringCashflowForMonth, recurringCashflowAnnualAmount, recurringCashflowMonthlyAmount, recurringCashflowOccurrenceMonths } from '~/services/money-domain'
 import { useMoneyStore } from '~/stores/money'
 
 const store = useMoneyStore()
@@ -17,6 +17,9 @@ const collapsedGroups = reactive({ income: false, expense: false })
 const draggingItemId = ref('')
 const dragOverItemId = ref('')
 const dragOverPlacement = ref('after')
+const selectedMonth = ref(new Date().getMonth() + 1)
+const selectionMode = ref(false)
+const selectedItemIds = ref([])
 
 const frequencyOptions = [
   { value: 'monthly', label: '每月' },
@@ -68,10 +71,36 @@ const incomeItems = computed(() => sortItems(rawIncomeItems.value))
 const expenseItems = computed(() => sortItems(rawExpenseItems.value))
 const pendingDeleteItem = computed(() => store.recurringCashflowItems.find((item) => item.id === pendingDeleteId.value) || null)
 const editingItem = computed(() => store.recurringCashflowItems.find((item) => item.id === editingId.value) || null)
+const monthItems = computed(() => store.recurringCashflowItems.filter((item) => recurringCashflowOccurrenceMonths(item).includes(Number(selectedMonth.value))))
+const monthIncomeCount = computed(() => monthItems.value.filter((item) => item.type === 'income').length)
+const monthExpenseCount = computed(() => monthItems.value.filter((item) => item.type === 'expense').length)
+const monthlyPlan = computed(() => calculateRecurringCashflowForMonth(store.recurringCashflowItems, selectedMonth.value))
+const selectedItems = computed(() => store.recurringCashflowItems.filter((item) => selectedItemIds.value.includes(item.id)))
+const selectedMonthlyPlan = computed(() => calculateRecurringCashflowForMonth(selectedItems.value, selectedMonth.value))
+const selectedAnnualPlan = computed(() => calculateRecurringCashflow(selectedItems.value))
+const monthNetAfterSelection = computed(() => monthlyPlan.value.netCashflow - selectedMonthlyPlan.value.netCashflow)
+const annualNetAfterSelection = computed(() => store.cashflowPlan.annualNetCashflow - selectedAnnualPlan.value.annualNetCashflow)
 
 const money = (value) => new Intl.NumberFormat('zh-TW', {
   style: 'currency', currency: 'TWD', minimumFractionDigits: 0, maximumFractionDigits: 2
 }).format(Number(value || 0))
+const signedMoney = (value) => `${Number(value) > 0 ? '+' : Number(value) < 0 ? '−' : ''}${money(Math.abs(Number(value || 0)))}`
+
+function toggleSelectionMode() {
+  selectionMode.value = !selectionMode.value
+  selectedItemIds.value = []
+  finishItemDrag()
+}
+
+function toggleSelectedItem(itemId) {
+  selectedItemIds.value = selectedItemIds.value.includes(itemId)
+    ? selectedItemIds.value.filter((id) => id !== itemId)
+    : [...selectedItemIds.value, itemId]
+}
+
+function isItemSelected(itemId) {
+  return selectedItemIds.value.includes(itemId)
+}
 
 function clearForm({ preserveType = false } = {}) {
   const selectedType = form.type
@@ -136,7 +165,7 @@ async function confirmDelete() {
 }
 
 function startItemDrag(item, event) {
-  if (sortKey.value !== 'custom' || store.saving) {
+  if (sortKey.value !== 'custom' || selectionMode.value || store.saving) {
     event.preventDefault()
     return
   }
@@ -190,22 +219,32 @@ watch(sortKey, (value) => {
   finishItemDrag()
   sortDirection.value = ['custom', 'occurrenceMonth'].includes(value) ? 'asc' : 'desc'
 })
+
+watch(() => store.recurringCashflowItems.map((item) => item.id), (itemIds) => {
+  selectedItemIds.value = selectedItemIds.value.filter((id) => itemIds.includes(id))
+})
 </script>
 
 <template>
   <div>
-    <PageHeader eyebrow="Cashflow planning" title="收支規劃" description="建立週期收支項目，系統會自動換算月均與年總額，快速看出固定現金流。">
-      <template #actions><span class="pill pill-neutral"><CalendarRange :size="16" aria-hidden="true" />{{ store.recurringCashflowItems.length }} 筆週期項目</span></template>
+    <PageHeader eyebrow="Cashflow planning" title="收支規劃" description="建立週期收支項目，查看指定月份實際會發生的收入與支出。">
+      <template #actions>
+        <div class="cashflow-page-actions">
+          <label for="cashflow-view-month">查看月份</label>
+          <UiSelect id="cashflow-view-month" v-model="selectedMonth" :options="monthOptions" aria-label="選擇要查看的收支月份" />
+          <span class="pill pill-neutral"><CalendarRange :size="16" aria-hidden="true" />{{ store.recurringCashflowItems.length }} 筆週期項目</span>
+        </div>
+      </template>
     </PageHeader>
 
     <div class="metric-grid cashflow-metrics">
-      <MetricCard label="月均固定收入" :value="money(store.cashflowPlan.monthlyIncome)" :note="`${incomeItems.length} 筆固定收入`">
+      <MetricCard :label="`${selectedMonth} 月固定收入`" :value="money(monthlyPlan.income)" :note="`${monthIncomeCount} 筆會發生 · 月均 ${money(store.cashflowPlan.monthlyIncome)}`">
         <template #icon><ArrowUpRight :size="18" aria-hidden="true" /></template>
       </MetricCard>
-      <MetricCard label="月均固定支出" :value="money(store.cashflowPlan.monthlyExpense)" :note="`${expenseItems.length} 筆固定支出`">
+      <MetricCard :label="`${selectedMonth} 月固定支出`" :value="money(monthlyPlan.expense)" :note="`${monthExpenseCount} 筆會發生 · 月均 ${money(store.cashflowPlan.monthlyExpense)}`">
         <template #icon><ArrowDownRight :size="18" aria-hidden="true" /></template>
       </MetricCard>
-      <MetricCard label="每月預估淨現金流" :value="money(store.cashflowPlan.monthlyNetCashflow)" :note="store.cashflowPlan.monthlyNetCashflow >= 0 ? '固定收入高於固定支出' : '固定支出高於固定收入'" :tone="store.cashflowPlan.monthlyNetCashflow < 0 ? 'negative' : ''">
+      <MetricCard :label="`${selectedMonth} 月預估淨現金流`" :value="money(monthlyPlan.netCashflow)" :note="monthlyPlan.netCashflow >= 0 ? '當月收入高於支出' : '當月支出高於收入'" :tone="monthlyPlan.netCashflow < 0 ? 'negative' : ''">
         <template #icon><WalletCards :size="18" aria-hidden="true" /></template>
       </MetricCard>
       <MetricCard label="年度預估總收入" :value="money(store.cashflowPlan.annualIncome)" :note="`年度總支出 ${money(store.cashflowPlan.annualExpense)}`">
@@ -267,21 +306,46 @@ watch(sortKey, (value) => {
         </UiPanel>
       </div>
 
-      <UiPanel title="週期收支項目" :description="sortKey === 'custom' ? `收入 ${incomeItems.length} 筆 · 支出 ${expenseItems.length} 筆；拖曳左側把手即可調整同類項目的順序。` : `收入 ${incomeItems.length} 筆 · 支出 ${expenseItems.length} 筆；目前依指定欄位排序。`" flush>
+      <UiPanel title="週期收支項目" :description="selectionMode ? '勾選想比較的項目，下方會即時計算這些項目對收支的影響。' : sortKey === 'custom' ? `收入 ${incomeItems.length} 筆 · 支出 ${expenseItems.length} 筆；拖曳左側把手即可調整同類項目的順序。` : `收入 ${incomeItems.length} 筆 · 支出 ${expenseItems.length} 筆；目前依指定欄位排序。`" flush>
         <template #action>
-          <div class="cashflow-sort">
-            <UiSelect id="cashflow-sort" v-model="sortKey" :options="sortOptions" aria-label="週期收支排序欄位" />
-            <button v-if="sortKey !== 'custom'" class="btn btn-secondary cashflow-sort__direction" type="button" :title="`目前${sortDirectionLabel}，點擊切換順序`" @click="sortDirection = sortDirection === 'asc' ? 'desc' : 'asc'">
-              <ArrowUpDown :size="16" aria-hidden="true" />{{ sortDirectionLabel }}
+          <div class="cashflow-list-actions">
+            <button class="btn cashflow-selection-toggle" :class="selectionMode ? 'btn-primary' : 'btn-secondary'" type="button" :aria-pressed="selectionMode" @click="toggleSelectionMode">
+              <ListChecks :size="16" aria-hidden="true" />{{ selectionMode ? '結束試算' : '選取試算' }}
             </button>
+            <div class="cashflow-sort">
+              <UiSelect id="cashflow-sort" v-model="sortKey" :options="sortOptions" aria-label="週期收支排序欄位" />
+              <button v-if="sortKey !== 'custom'" class="btn btn-secondary cashflow-sort__direction" type="button" :title="`目前${sortDirectionLabel}，點擊切換順序`" @click="sortDirection = sortDirection === 'asc' ? 'desc' : 'asc'">
+                <ArrowUpDown :size="16" aria-hidden="true" />{{ sortDirectionLabel }}
+              </button>
+            </div>
           </div>
         </template>
         <template v-if="store.recurringCashflowItems.length">
+          <section v-if="selectionMode" class="scenario-panel" aria-live="polite">
+            <div class="scenario-panel__header">
+              <div><strong>選取項目試算</strong><span>只做排除比較，不會刪除或修改項目。</span></div>
+              <button v-if="selectedItemIds.length" class="btn btn-ghost" type="button" @click="selectedItemIds = []">清除選取</button>
+            </div>
+            <p v-if="!selectedItemIds.length" class="scenario-panel__empty">從下方收入或支出勾選幾筆，即可看到 {{ selectedMonth }} 月與全年的影響。</p>
+            <template v-else>
+              <div class="scenario-summary">
+                <div><small>已選項目</small><strong>{{ selectedItemIds.length }} 筆</strong></div>
+                <div><small>{{ selectedMonth }} 月選取收入</small><strong>{{ money(selectedMonthlyPlan.income) }}</strong></div>
+                <div><small>{{ selectedMonth }} 月選取支出</small><strong>{{ money(selectedMonthlyPlan.expense) }}</strong></div>
+                <div><small>{{ selectedMonth }} 月淨影響</small><strong>{{ signedMoney(selectedMonthlyPlan.netCashflow) }}</strong></div>
+              </div>
+              <div class="scenario-comparison">
+                <span><small>排除後 {{ selectedMonth }} 月淨現金流</small><strong>{{ money(monthlyPlan.netCashflow) }} <b aria-hidden="true">→</b> {{ money(monthNetAfterSelection) }}</strong></span>
+                <span><small>排除後年度淨現金流</small><strong>{{ money(store.cashflowPlan.annualNetCashflow) }} <b aria-hidden="true">→</b> {{ money(annualNetAfterSelection) }}</strong></span>
+              </div>
+            </template>
+          </section>
+
           <section class="cashflow-group" aria-labelledby="income-items-title">
             <header class="cashflow-group__header">
               <button type="button" :aria-expanded="!collapsedGroups.income" aria-controls="income-items-content" @click="collapsedGroups.income = !collapsedGroups.income">
                 <div><span class="cashflow-group__icon cashflow-group__icon--income"><ArrowUpRight :size="17" aria-hidden="true" /></span><span><strong id="income-items-title">固定收入</strong><small>{{ incomeItems.length }} 筆</small></span></div>
-                <span class="cashflow-group__summary">{{ money(store.cashflowPlan.monthlyIncome) }}／月<ChevronDown :size="18" :class="{ 'cashflow-group__chevron--open': !collapsedGroups.income }" aria-hidden="true" /></span>
+                <span class="cashflow-group__summary">{{ selectedMonth }} 月 {{ money(monthlyPlan.income) }}<ChevronDown :size="18" :class="{ 'cashflow-group__chevron--open': !collapsedGroups.income }" aria-hidden="true" /></span>
               </button>
             </header>
             <div v-if="incomeItems.length && !collapsedGroups.income" id="income-items-content" class="cashflow-list">
@@ -290,7 +354,9 @@ watch(sortKey, (value) => {
                 :key="item.id"
                 class="cashflow-row"
                 :class="{
-                  'cashflow-row--sortable': sortKey === 'custom',
+                  'cashflow-row--sortable': sortKey === 'custom' && !selectionMode,
+                  'cashflow-row--selecting': selectionMode,
+                  'cashflow-row--selected': isItemSelected(item.id),
                   'cashflow-row--dragging': draggingItemId === item.id,
                   'cashflow-row--drop-before': dragOverItemId === item.id && dragOverPlacement === 'before',
                   'cashflow-row--drop-after': dragOverItemId === item.id && dragOverPlacement === 'after'
@@ -298,7 +364,8 @@ watch(sortKey, (value) => {
                 @dragover="dragItemOver(item, $event)"
                 @drop="dropItem(item, $event)"
               >
-                <button v-if="sortKey === 'custom'" class="cashflow-row__drag-handle" type="button" draggable="true" :aria-label="`拖曳調整 ${item.name} 的順序；也可用上下方向鍵移動`" title="拖曳調整順序" @dragstart="startItemDrag(item, $event)" @dragend="finishItemDrag" @keydown.up.prevent="moveItemWithKeyboard(item, -1, incomeItems, index)" @keydown.down.prevent="moveItemWithKeyboard(item, 1, incomeItems, index)"><GripVertical :size="18" aria-hidden="true" /></button>
+                <input v-if="selectionMode" class="cashflow-row__checkbox" type="checkbox" :checked="isItemSelected(item.id)" :aria-label="`選取 ${item.name} 進行試算`" @change="toggleSelectedItem(item.id)" />
+                <button v-else-if="sortKey === 'custom'" class="cashflow-row__drag-handle" type="button" draggable="true" :aria-label="`拖曳調整 ${item.name} 的順序；也可用上下方向鍵移動`" title="拖曳調整順序" @dragstart="startItemDrag(item, $event)" @dragend="finishItemDrag" @keydown.up.prevent="moveItemWithKeyboard(item, -1, incomeItems, index)" @keydown.down.prevent="moveItemWithKeyboard(item, 1, incomeItems, index)"><GripVertical :size="18" aria-hidden="true" /></button>
                 <div class="cashflow-row__main"><strong>{{ item.name }}</strong><span>{{ frequencyLabels[item.frequency] }} {{ money(item.amount) }} · {{ occurrenceLabel(item) }}</span></div>
                 <div class="cashflow-row__amount"><small>月均</small><strong>{{ money(recurringCashflowMonthlyAmount(item)) }}</strong></div>
                 <div class="cashflow-row__amount"><small>年總額</small><strong>{{ money(recurringCashflowAnnualAmount(item)) }}</strong></div>
@@ -315,7 +382,7 @@ watch(sortKey, (value) => {
             <header class="cashflow-group__header">
               <button type="button" :aria-expanded="!collapsedGroups.expense" aria-controls="expense-items-content" @click="collapsedGroups.expense = !collapsedGroups.expense">
                 <div><span class="cashflow-group__icon cashflow-group__icon--expense"><ArrowDownRight :size="17" aria-hidden="true" /></span><span><strong id="expense-items-title">固定支出</strong><small>{{ expenseItems.length }} 筆</small></span></div>
-                <span class="cashflow-group__summary">{{ money(store.cashflowPlan.monthlyExpense) }}／月<ChevronDown :size="18" :class="{ 'cashflow-group__chevron--open': !collapsedGroups.expense }" aria-hidden="true" /></span>
+                <span class="cashflow-group__summary">{{ selectedMonth }} 月 {{ money(monthlyPlan.expense) }}<ChevronDown :size="18" :class="{ 'cashflow-group__chevron--open': !collapsedGroups.expense }" aria-hidden="true" /></span>
               </button>
             </header>
             <div v-if="expenseItems.length && !collapsedGroups.expense" id="expense-items-content" class="cashflow-list">
@@ -324,7 +391,9 @@ watch(sortKey, (value) => {
                 :key="item.id"
                 class="cashflow-row"
                 :class="{
-                  'cashflow-row--sortable': sortKey === 'custom',
+                  'cashflow-row--sortable': sortKey === 'custom' && !selectionMode,
+                  'cashflow-row--selecting': selectionMode,
+                  'cashflow-row--selected': isItemSelected(item.id),
                   'cashflow-row--dragging': draggingItemId === item.id,
                   'cashflow-row--drop-before': dragOverItemId === item.id && dragOverPlacement === 'before',
                   'cashflow-row--drop-after': dragOverItemId === item.id && dragOverPlacement === 'after'
@@ -332,7 +401,8 @@ watch(sortKey, (value) => {
                 @dragover="dragItemOver(item, $event)"
                 @drop="dropItem(item, $event)"
               >
-                <button v-if="sortKey === 'custom'" class="cashflow-row__drag-handle" type="button" draggable="true" :aria-label="`拖曳調整 ${item.name} 的順序；也可用上下方向鍵移動`" title="拖曳調整順序" @dragstart="startItemDrag(item, $event)" @dragend="finishItemDrag" @keydown.up.prevent="moveItemWithKeyboard(item, -1, expenseItems, index)" @keydown.down.prevent="moveItemWithKeyboard(item, 1, expenseItems, index)"><GripVertical :size="18" aria-hidden="true" /></button>
+                <input v-if="selectionMode" class="cashflow-row__checkbox" type="checkbox" :checked="isItemSelected(item.id)" :aria-label="`選取 ${item.name} 進行試算`" @change="toggleSelectedItem(item.id)" />
+                <button v-else-if="sortKey === 'custom'" class="cashflow-row__drag-handle" type="button" draggable="true" :aria-label="`拖曳調整 ${item.name} 的順序；也可用上下方向鍵移動`" title="拖曳調整順序" @dragstart="startItemDrag(item, $event)" @dragend="finishItemDrag" @keydown.up.prevent="moveItemWithKeyboard(item, -1, expenseItems, index)" @keydown.down.prevent="moveItemWithKeyboard(item, 1, expenseItems, index)"><GripVertical :size="18" aria-hidden="true" /></button>
                 <div class="cashflow-row__main"><strong>{{ item.name }}</strong><span>{{ frequencyLabels[item.frequency] }} {{ money(item.amount) }} · {{ occurrenceLabel(item) }}</span></div>
                 <div class="cashflow-row__amount"><small>月均</small><strong>{{ money(recurringCashflowMonthlyAmount(item)) }}</strong></div>
                 <div class="cashflow-row__amount"><small>年總額</small><strong>{{ money(recurringCashflowAnnualAmount(item)) }}</strong></div>
@@ -360,8 +430,14 @@ watch(sortKey, (value) => {
 .cashflow-metrics :deep(.metric-card), .cashflow-metrics :deep(.metric-card:first-child) { grid-column: span 3; }
 .cashflow-metrics :deep(.metric-card:first-child) { background: var(--surface); color: var(--text); border-color: var(--border); }
 .cashflow-metrics :deep(.metric-card:first-child .metric-label), .cashflow-metrics :deep(.metric-card:first-child .metric-note) { color: var(--muted); }
+.cashflow-page-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.cashflow-page-actions > label { color: var(--muted); font-size: .78rem; font-weight: 700; white-space: nowrap; }
+.cashflow-page-actions :deep(.ui-select) { width: 96px; }
+.cashflow-page-actions :deep(.ui-select__trigger) { min-height: 38px; padding-block: 7px; font-size: .8rem; }
 .cashflow-workspace { align-items: start; }
 .cashflow-form-column { position: sticky; top: 18px; }
+.cashflow-list-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
+.cashflow-selection-toggle { min-height: 38px; padding: 7px 10px; font-size: .78rem; white-space: nowrap; }
 .cashflow-sort { display: flex; align-items: center; gap: 7px; }
 .cashflow-sort :deep(.ui-select) { width: 130px; }
 .cashflow-sort :deep(.ui-select__trigger) { min-height: 38px; padding-block: 7px; font-size: .76rem; }
@@ -377,6 +453,20 @@ watch(sortKey, (value) => {
 .conversion-preview small { color: var(--muted); font-size: .76rem; }
 .conversion-preview strong { font-variant-numeric: tabular-nums; font-size: .9rem; }
 .conversion-preview__schedule { grid-column: 1 / -1; padding-top: 8px; border-top: 1px solid var(--border); }
+.scenario-panel { display: grid; gap: 14px; padding: 18px 24px; border-bottom: 1px solid var(--border); background: var(--primary-soft); }
+.scenario-panel__header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.scenario-panel__header > div { display: grid; gap: 3px; }
+.scenario-panel__header strong { font-size: .88rem; }
+.scenario-panel__header span, .scenario-panel__empty { color: var(--muted); font-size: .76rem; }
+.scenario-panel__header .btn { min-height: 34px; padding: 6px 9px; font-size: .76rem; }
+.scenario-panel__empty { margin: 0; padding: 12px; border: 1px dashed var(--border-strong); border-radius: 10px; background: var(--surface); text-align: center; }
+.scenario-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.scenario-summary > div { min-width: 0; display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.scenario-summary small, .scenario-comparison small { color: var(--muted); font-size: .72rem; }
+.scenario-summary strong, .scenario-comparison strong { overflow: hidden; color: var(--text); font-size: .82rem; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+.scenario-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.scenario-comparison > span { min-width: 0; display: grid; gap: 4px; }
+.scenario-comparison b { padding-inline: 4px; color: var(--primary); font-weight: 800; }
 .cashflow-group + .cashflow-group { border-top: 1px solid var(--border); }
 .cashflow-group__header { background: var(--surface-muted); }
 .cashflow-group__header > button { width: 100%; min-height: 62px; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 24px; border: 0; background: transparent; color: inherit; cursor: pointer; text-align: left; }
@@ -392,7 +482,8 @@ watch(sortKey, (value) => {
 .cashflow-group__icon--income, .cashflow-group__icon--expense { border: 1px solid var(--border); background: var(--surface); color: var(--text-soft); }
 .cashflow-list { display: grid; }
 .cashflow-row { position: relative; display: grid; grid-template-columns: minmax(130px, 1.35fr) minmax(96px, .72fr) minmax(105px, .78fr) auto; align-items: center; gap: 12px; min-height: 72px; padding: 12px 20px 12px 24px; border-top: 1px solid var(--border); transition: background-color .16s ease, opacity .16s ease; }
-.cashflow-row--sortable { grid-template-columns: 28px minmax(130px, 1.35fr) minmax(96px, .72fr) minmax(105px, .78fr) auto; padding-left: 16px; }
+.cashflow-row--sortable, .cashflow-row--selecting { grid-template-columns: 28px minmax(130px, 1.35fr) minmax(96px, .72fr) minmax(105px, .78fr) auto; padding-left: 16px; }
+.cashflow-row--selected { background: var(--primary-soft); }
 .cashflow-row--dragging { opacity: .45; background: var(--surface-muted); }
 .cashflow-row--drop-before::before, .cashflow-row--drop-after::after { content: ""; position: absolute; z-index: 2; right: 12px; left: 12px; height: 3px; border-radius: 999px; background: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
 .cashflow-row--drop-before::before { top: -2px; }
@@ -400,6 +491,8 @@ watch(sortKey, (value) => {
 .cashflow-row__drag-handle { width: 28px; height: 36px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--muted); cursor: grab; touch-action: none; }
 .cashflow-row__drag-handle:hover, .cashflow-row__drag-handle:focus-visible { background: var(--primary-soft); color: var(--primary); }
 .cashflow-row__drag-handle:active { cursor: grabbing; }
+.cashflow-row__checkbox { width: 18px; height: 18px; margin: auto; accent-color: var(--primary); cursor: pointer; }
+.cashflow-row__checkbox:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
 .cashflow-row__main { min-width: 0; }
 .cashflow-row__main strong, .cashflow-row__main span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cashflow-row__main strong { font-size: .86rem; }
@@ -419,13 +512,21 @@ watch(sortKey, (value) => {
 }
 @media (max-width: 620px) {
   .cashflow-metrics :deep(.metric-card), .cashflow-metrics :deep(.metric-card:first-child) { grid-column: span 12; }
+  .cashflow-page-actions { flex-wrap: wrap; justify-content: flex-start; }
+  .cashflow-page-actions .pill { flex: 1 1 100%; justify-content: center; }
+  .scenario-panel { padding-inline: 18px; }
+  .scenario-panel__header { align-items: flex-start; }
+  .scenario-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .scenario-comparison { grid-template-columns: 1fr; }
   .cashflow-row { grid-template-columns: minmax(0, 1fr) auto; padding-inline: 18px; }
-  .cashflow-row--sortable { grid-template-columns: 28px minmax(0, 1fr) auto; padding-left: 12px; }
+  .cashflow-row--sortable, .cashflow-row--selecting { grid-template-columns: 28px minmax(0, 1fr) auto; padding-left: 12px; }
   .cashflow-row__amount { display: none; }
   .cashflow-row__main span { white-space: normal; }
   .cashflow-group__header > button { padding-inline: 18px; }
   .cashflow-workspace :deep(.panel__header) { flex-direction: column; }
-  .cashflow-workspace :deep(.panel__action), .cashflow-sort { width: 100%; justify-content: stretch; }
+  .cashflow-workspace :deep(.panel__action), .cashflow-list-actions, .cashflow-sort { width: 100%; justify-content: stretch; }
+  .cashflow-list-actions { flex-wrap: wrap; }
+  .cashflow-selection-toggle { flex: 1 1 100%; }
   .cashflow-sort :deep(.ui-select) { flex: 1; width: auto; }
   .cashflow-sort__direction { flex: 1; }
 }

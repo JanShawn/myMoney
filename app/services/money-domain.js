@@ -209,6 +209,24 @@ export function calculateRecurringCashflow(items = []) {
   }
 }
 
+export function calculateRecurringCashflowForMonth(items = [], month = 1) {
+  const targetMonth = Math.min(12, Math.max(1, Math.trunc(Number(month) || 1)))
+  const activeItems = items.filter((item) => item
+    && Number(item.amount) > 0
+    && recurringCashflowOccurrenceMonths(item).includes(targetMonth))
+  const income = activeItems
+    .filter((item) => item.type === 'income')
+    .reduce((total, item) => total + Number(item.amount || 0), 0)
+  const expense = activeItems
+    .filter((item) => item.type === 'expense')
+    .reduce((total, item) => total + Number(item.amount || 0), 0)
+  return {
+    income: round(income),
+    expense: round(expense),
+    netCashflow: round(income - expense)
+  }
+}
+
 const round = (value, digits = 2) => Number(Number(value || 0).toFixed(digits))
 const itemValue = (item) => Number(item.amount || 0) * (item.currency === 'TWD' ? 1 : Number(item.exchangeRate || 0))
 const holdingMarketValue = (holding) => Number(holding.quantity || 0) * Number(holding.price || 0)
