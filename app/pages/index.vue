@@ -14,7 +14,17 @@ const dateTime = (value) => value ? new Intl.DateTimeFormat('zh-TW', { dateStyle
 const pendingDeleteDate = ref('')
 const hideAmounts = ref(false)
 const selectedRecordYear = ref('')
+const selectedRecordDate = ref('')
 const displayMoney = (value) => hideAmounts.value ? 'NT$ ******' : money(value)
+const compactCellMoney = (value) => {
+  if (hideAmounts.value) return '****'
+  const amount = Number(value || 0)
+  if (Math.abs(amount) >= 10000) {
+    const wan = amount / 10000
+    return `${wan.toLocaleString('zh-TW', { maximumFractionDigits: wan % 1 === 0 ? 0 : 1 })}萬`
+  }
+  return amount.toLocaleString('zh-TW', { maximumFractionDigits: 0 })
+}
 
 const chartSnapshots = computed(() => {
   const limit = store.config?.settings?.snapshotDisplayLimit || 30
@@ -48,10 +58,32 @@ const selectedYearRecords = computed(() => store.snapshots
   .filter((record) => String(record.date || '').startsWith(`${selectedRecordYear.value}-`))
   .slice()
   .reverse())
+const monthSlots = computed(() => {
+  const slots = Array.from({ length: 12 }, (_, index) => ({ month: index + 1, records: [] }))
+  for (const record of selectedYearRecords.value) {
+    const month = Number(String(record.date || '').slice(5, 7))
+    if (month >= 1 && month <= 12) slots[month - 1].records.push(record)
+  }
+  return slots
+})
+const selectedRecord = computed(() => selectedYearRecords.value.find((record) => record.date === selectedRecordDate.value)
+  || selectedYearRecords.value[0]
+  || null)
+const selectedMonthRecordCount = computed(() => {
+  if (!selectedRecord.value) return 0
+  const month = Number(String(selectedRecord.value.date).slice(5, 7))
+  return monthSlots.value[month - 1]?.records.length || 0
+})
 const pendingDeleteRecord = computed(() => store.snapshots.find((record) => record.date === pendingDeleteDate.value) || null)
 
 watch(recordYears, (years) => {
   if (!years.includes(selectedRecordYear.value)) selectedRecordYear.value = years[0] || ''
+}, { immediate: true })
+
+watch(selectedYearRecords, (records) => {
+  if (!records.some((record) => record.date === selectedRecordDate.value)) {
+    selectedRecordDate.value = records[0]?.date || ''
+  }
 }, { immediate: true })
 
 function moveRecordYear(direction) {
@@ -59,8 +91,17 @@ function moveRecordYear(direction) {
   if (target) selectedRecordYear.value = target
 }
 
-function compactDate(value) {
-  return String(value || '').slice(5).replace('-', '/')
+function selectMonthSlot(slot) {
+  if (!slot.records.length) return
+  selectedRecordDate.value = slot.records[0].date
+}
+
+function cycleMonthRecord(date) {
+  const month = Number(String(date || '').slice(5, 7))
+  const records = monthSlots.value[month - 1]?.records || []
+  if (records.length < 2) return
+  const index = records.findIndex((record) => record.date === date)
+  selectedRecordDate.value = records[(index + 1) % records.length].date
 }
 
 async function confirmDeleteSnapshot() {
@@ -166,7 +207,7 @@ const marketData = computed(() => ({
         </EmptyState>
       </UiPanel>
 
-      <section v-else class="charts-grid" aria-label="資產圖表">
+      <section v-else class="charts-grid" aria-label="資產圖表與盤點紀錄">
         <UiPanel v-if="hasTrendData" class="chart-panel" title="淨資產趨勢" :description="`最近 ${chartSnapshots.length} 筆盤點`">
           <ClientOnly><AppChart :data="netWorthData" label="淨資產歷史趨勢折線圖" :privacy="hideAmounts" /></ClientOnly>
         </UiPanel>
@@ -176,40 +217,61 @@ const marketData = computed(() => ({
         <UiPanel v-if="hasSnapshotData" class="chart-panel" title="盤點當下的加權指數與 240MA" description="每個點都來自該次資產盤點保存的市場數字">
           <ClientOnly><AppChart :data="marketData" label="加權指數與 240 日均線比較圖" /></ClientOnly>
         </UiPanel>
+        <UiPanel
+          v-if="hasSnapshotData"
+          class="chart-panel market-history-panel"
+          title="盤點與大盤紀錄"
+          :description="selectedRecordYear ? `${selectedRecordYear} 年 · 點月份查看` : '完成盤點後會顯示在這裡'"
+        >
+          <template v-if="recordYears.length" #action>
+            <div class="year-pager" aria-label="切換盤點紀錄年份">
+              <button class="year-pager__button" type="button" :disabled="selectedRecordYearIndex >= recordYears.length - 1" aria-label="查看上一個年度" @click="moveRecordYear(1)"><ChevronLeft :size="15" aria-hidden="true" /></button>
+              <strong aria-live="polite">{{ selectedRecordYear }}</strong>
+              <span>{{ selectedRecordYearIndex + 1 }}/{{ recordYears.length }}</span>
+              <button class="year-pager__button" type="button" :disabled="selectedRecordYearIndex <= 0" aria-label="查看下一個年度" @click="moveRecordYear(-1)"><ChevronRight :size="15" aria-hidden="true" /></button>
+            </div>
+          </template>
+          <div class="month-board" :aria-label="`${selectedRecordYear} 年盤點月份`">
+            <button
+              v-for="slot in monthSlots"
+              :key="slot.month"
+              type="button"
+              class="month-cell"
+              :class="{
+                'month-cell--empty': !slot.records.length,
+                'month-cell--active': selectedRecord && slot.records.some((record) => record.date === selectedRecord.date)
+              }"
+              :disabled="!slot.records.length"
+              :aria-pressed="Boolean(selectedRecord && slot.records.some((record) => record.date === selectedRecord.date))"
+              @click="selectMonthSlot(slot)"
+            >
+              <span>{{ slot.month }}月</span>
+              <strong v-if="slot.records.length">{{ compactCellMoney(slot.records[0].netWorth) }}</strong>
+              <em v-else>—</em>
+              <small v-if="slot.records.length > 1">{{ slot.records.length }} 筆</small>
+            </button>
+          </div>
+          <div v-if="selectedRecord" class="record-detail">
+            <div class="record-detail__copy">
+              <strong>{{ selectedRecord.date }}</strong>
+              <span>淨資產 {{ displayMoney(selectedRecord.netWorth) }}</span>
+              <span>加權 {{ number(selectedRecord.taiex) }} · 240MA {{ number(selectedRecord.ma240) }}</span>
+            </div>
+            <div class="record-detail__actions">
+              <button
+                v-if="selectedMonthRecordCount > 1"
+                class="btn btn-ghost"
+                type="button"
+                @click="cycleMonthRecord(selectedRecord.date)"
+              >
+                同月下一筆
+              </button>
+              <button class="btn btn-ghost btn-icon" type="button" :aria-label="`刪除 ${selectedRecord.date} 的盤點紀錄`" @click="pendingDeleteDate = selectedRecord.date"><Trash2 :size="16" aria-hidden="true" /></button>
+            </div>
+          </div>
+          <p v-else class="record-detail-empty">這個年份還沒有可選的盤點紀錄。</p>
+        </UiPanel>
       </section>
-
-      <UiPanel
-        class="space-before market-history-panel"
-        title="盤點與大盤紀錄"
-        :description="selectedRecordYear ? `${selectedRecordYear} 年共 ${selectedYearRecords.length} 筆；表頭固定，超過約 7 筆時在區塊內捲動。` : '完成盤點後，這裡會依年份整理淨資產與大盤數字。'"
-        compact
-      >
-        <template v-if="recordYears.length" #action>
-          <div class="year-pager" aria-label="切換盤點紀錄年份">
-            <button class="year-pager__button" type="button" :disabled="selectedRecordYearIndex >= recordYears.length - 1" aria-label="查看上一個年度" @click="moveRecordYear(1)"><ChevronLeft :size="17" aria-hidden="true" /></button>
-            <strong aria-live="polite">{{ selectedRecordYear }} 年</strong>
-            <span>{{ selectedRecordYearIndex + 1 }} / {{ recordYears.length }}</span>
-            <button class="year-pager__button" type="button" :disabled="selectedRecordYearIndex <= 0" aria-label="查看下一個年度" @click="moveRecordYear(-1)"><ChevronRight :size="17" aria-hidden="true" /></button>
-          </div>
-        </template>
-        <div v-if="hasSnapshotData" class="market-records" role="table" :aria-label="`${selectedRecordYear} 年盤點與大盤紀錄`">
-          <div class="market-record market-record--header" role="row">
-            <span role="columnheader">日期</span>
-            <span role="columnheader">淨資產</span>
-            <span role="columnheader">加權指數</span>
-            <span role="columnheader">240MA</span>
-            <span class="market-record__action-label" role="columnheader"><span class="sr-only">操作</span></span>
-          </div>
-          <div v-for="record in selectedYearRecords" :key="record.date" class="market-record" role="row">
-            <strong role="cell" :title="record.date">{{ compactDate(record.date) }}</strong>
-            <span role="cell">{{ displayMoney(record.netWorth) }}</span>
-            <span role="cell">{{ number(record.taiex) }}</span>
-            <span role="cell">{{ number(record.ma240) }}</span>
-            <button class="btn btn-ghost btn-icon market-record__delete" type="button" :aria-label="`刪除 ${record.date} 的盤點紀錄`" @click="pendingDeleteDate = record.date"><Trash2 :size="15" aria-hidden="true" /></button>
-          </div>
-        </div>
-        <EmptyState v-else title="還沒有資產與大盤紀錄" description="完成第一筆資產盤點後，淨資產、加權指數與 240MA 會一起顯示在這裡。"><template #action><NuxtLink to="/snapshot" class="btn btn-secondary">前往資產盤點</NuxtLink></template></EmptyState>
-      </UiPanel>
     </template>
     <ConfirmDialog :open="Boolean(pendingDeleteRecord)" title="刪除這筆盤點紀錄？" confirm-label="確認刪除" :busy="store.saving" @close="pendingDeleteDate = ''" @confirm="confirmDeleteSnapshot">
       <p><strong>{{ pendingDeleteRecord?.date }} 的資產盤點</strong></p>
@@ -254,25 +316,31 @@ const marketData = computed(() => ({
 .support-allocation-row + .support-allocation-row { margin-left: 18px; padding-left: 18px; border-left: 1px solid var(--border); }
 .support-allocation-row > div { display: grid; gap: 3px; min-width: 0; }
 .support-allocation-row strong { color: var(--text); font-size: .85rem; }
-.market-records { max-height: 288px; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; border: 1px solid var(--border); border-radius: var(--radius-md); }
-.year-pager { display: grid; grid-template-columns: 34px auto auto 34px; align-items: center; gap: 7px; min-height: 36px; padding: 2px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-muted); }
-.year-pager strong { color: var(--text); font-size: .8rem; white-space: nowrap; }
-.year-pager > span { color: var(--muted); font-size: .72rem; white-space: nowrap; }
-.year-pager__button { width: 34px; height: 32px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--text-soft); cursor: pointer; transition: background-color .18s ease, color .18s ease; }
+.market-history-panel :deep(.panel__body) { display: grid; gap: 12px; }
+.year-pager { display: grid; grid-template-columns: 28px auto auto 28px; align-items: center; gap: 4px; min-height: 28px; padding: 1px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-muted); }
+.year-pager strong { color: var(--text); font-size: .74rem; white-space: nowrap; }
+.year-pager > span { color: var(--muted); font-size: .68rem; white-space: nowrap; }
+.year-pager__button { width: 28px; height: 26px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-soft); cursor: pointer; transition: background-color .18s ease, color .18s ease; }
 .year-pager__button:hover:not(:disabled) { background: var(--surface); color: var(--primary); }
 .year-pager__button:disabled { color: var(--muted); cursor: not-allowed; opacity: .42; }
-.market-record { display: grid; grid-template-columns: minmax(54px, .55fr) repeat(3, minmax(96px, 1fr)) 28px; align-items: center; gap: 10px; min-height: 36px; padding: 5px 10px; border-bottom: 1px solid var(--border); font-size: .74rem; }
-.market-record:last-child { border-bottom: 0; }
-.market-record > :not(:first-child, .market-record__delete) { text-align: right; font-variant-numeric: tabular-nums; }
-.market-record--header { position: sticky; top: 0; z-index: 1; min-height: 32px; background: var(--surface-muted); color: var(--muted); font-weight: 720; font-size: .7rem; }
-.market-record__action-label { text-align: center !important; }
-.market-record__delete { width: 28px; height: 28px; justify-self: end; color: var(--muted); opacity: 1; transition: opacity .16s ease, background-color .16s ease, color .16s ease; }
-.market-record__delete:hover, .market-record__delete:focus-visible { background: var(--danger-soft); color: var(--danger); }
-@media (hover: hover) and (pointer: fine) {
-  .market-record__delete { opacity: 0; }
-  .market-record:hover .market-record__delete,
-  .market-record:focus-within .market-record__delete { opacity: 1; }
-}
+.month-board { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.month-cell { min-height: 58px; display: grid; gap: 2px; align-content: start; padding: 8px 9px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-muted); color: var(--text); text-align: left; cursor: pointer; transition: border-color .16s ease, background-color .16s ease, box-shadow .16s ease; }
+.month-cell span { color: var(--muted); font-size: .68rem; font-weight: 720; }
+.month-cell strong { overflow-wrap: anywhere; color: var(--text); font-size: .78rem; font-variant-numeric: tabular-nums; line-height: 1.25; }
+.month-cell em { color: var(--muted); font-size: .78rem; font-style: normal; }
+.month-cell small { color: var(--primary); font-size: .64rem; font-weight: 700; }
+.month-cell--empty { cursor: default; opacity: .55; }
+.month-cell--active { border-color: var(--primary); background: var(--primary-soft); box-shadow: 0 0 0 2px var(--control-ring); }
+.month-cell:hover:not(:disabled) { border-color: var(--control-hover-border); }
+.record-detail { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-muted); }
+.record-detail__copy { display: grid; gap: 3px; min-width: 0; }
+.record-detail__copy strong { font-size: .8rem; }
+.record-detail__copy span { color: var(--muted); font-size: .72rem; line-height: 1.4; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.record-detail__actions { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.record-detail__actions .btn-ghost:not(.btn-icon) { min-height: 30px; padding: 4px 8px; font-size: .72rem; }
+.record-detail__actions .btn-icon { color: var(--muted); }
+.record-detail__actions .btn-icon:hover { background: var(--danger-soft); color: var(--danger); }
+.record-detail-empty { margin: 0; color: var(--muted); font-size: .76rem; }
 @media (max-width: 1120px) {
   .stock-allocation-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .allocation-identity { grid-column: 1 / -1; margin-bottom: 11px; padding: 0 0 11px; border-bottom: 1px solid var(--border); }
@@ -296,8 +364,8 @@ const marketData = computed(() => ({
   .allocation-stat:last-child { border-bottom: 0; }
   .support-allocation-row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; }
   .support-allocation-row h3 { grid-column: 1 / -1; }
-  .market-records { max-height: 256px; }
-  .market-record { min-width: 520px; }
+  .month-board { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .record-detail { flex-direction: column; }
   .market-history-panel :deep(.panel__header) { flex-direction: column; }
   .market-history-panel :deep(.panel__action) { width: 100%; justify-content: flex-start; }
 }
