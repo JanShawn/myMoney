@@ -92,6 +92,13 @@ describe('IndexedDB 備份異動摘要', () => {
     await expect(inspectJsonImport(file, createDefaultConfig())).rejects.toThrow('不是 myMoney 完整備份')
   })
 
+  it('拒絕超過筆數上限的備份', async () => {
+    const oversized = createDefaultConfig()
+    oversized.holdings = Array.from({ length: 501 }, (_, index) => ({ id: `h-${index}`, ticker: '2330', name: '台積電' }))
+    const file = { name: 'too-many.json', text: async () => JSON.stringify(oversized) }
+    await expect(inspectJsonImport(file, createDefaultConfig())).rejects.toThrow('holdings 超過上限')
+  })
+
   it('建立保留系統預設資料的重設版本', () => {
     const resetAt = new Date('2026-09-01T08:00:00.000Z')
     const data = createResetConfig(resetAt)

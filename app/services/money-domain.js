@@ -1,6 +1,20 @@
 export const SYSTEM_CASH_GROUP_ID = 'group-cash'
 export const SYSTEM_CASH_ITEM_ID = 'item-cash'
 
+export const CONFIG_LIMITS = Object.freeze({
+  maxJsonBytes: 5 * 1024 * 1024,
+  maxGroups: 200,
+  maxItems: 1000,
+  maxHoldings: 500,
+  maxSnapshots: 4000,
+  maxRecurringCashflowItems: 500,
+  maxCashDrafts: 500,
+  maxCashDraftRows: 200,
+  maxNameLength: 80,
+  maxNoteLength: 500,
+  maxTickerLength: 12
+})
+
 const CONFIG_VERSION = 7
 const DEFAULT_GROUP_ORDERS = {
   [SYSTEM_CASH_GROUP_ID]: 0,
@@ -22,6 +36,13 @@ const LEGACY_DEFAULT_GROUP_ORDERS_WITHOUT_CASH = {
   'group-other': 2,
   'group-debt': 3
 }
+const SNAPSHOT_NUMBER_KEYS = [
+  'totalAssets', 'totalLiabilities', 'netWorth', 'availableCash', 'availableAssets',
+  'totalStocks', 'stockRatio', 'totalBonds', 'bondRatio', 'totalCash', 'totalForeign',
+  'totalOther', 'restrictedCash', 'totalStockExposure', 'totalBondExposure', 'totalInvestmentExposure',
+  'taiex', 'ma240'
+]
+
 const matchesGroupOrder = (groups, orders) => Object.entries(orders)
   .every(([id, order]) => groups.some((group) => group.id === id && Number(group.order) === order))
 const createSystemCashGroup = (order = DEFAULT_GROUP_ORDERS[SYSTEM_CASH_GROUP_ID]) => ({ id: SYSTEM_CASH_GROUP_ID, name: '現金', order, archived: false, system: true })
@@ -30,6 +51,13 @@ const createSystemCashItem = () => ({
   assetClass: 'cash', liquidity: 'available', includeInAssets: true,
   amount: 0, currency: 'TWD', exchangeRate: 1, order: 0, archived: false, system: true
 })
+
+const clipString = (value, max = CONFIG_LIMITS.maxNameLength) => String(value ?? '').trim().slice(0, max)
+const finiteNumber = (value, fallback = 0) => {
+  const number = Number(value)
+  return Number.isFinite(number) ? number : fallback
+}
+const limitArray = (value, max) => (Array.isArray(value) ? value : []).slice(0, max)
 
 export function createDefaultConfig() {
   return {
@@ -59,28 +87,162 @@ export function createDefaultConfig() {
   }
 }
 
+export function normalizeTicker(value) {
+  return clipString(String(value || '').toUpperCase(), CONFIG_LIMITS.maxTickerLength).replace(/[^0-9A-Z]/g, '')
+}
+
 export function normalizeAccountItem(input = {}, fallbackOrder = 0) {
-  const item = { ...input }
-  const behavior = ['manual', 'foreign', 'cash', 'liability'].includes(item.behavior) ? item.behavior : 'manual'
+  const behavior = ['manual', 'foreign', 'cash', 'liability'].includes(input.behavior) ? input.behavior : 'manual'
   const foreign = behavior === 'foreign'
-  item.behavior = behavior
-  item.assetClass = behavior === 'liability' ? 'liability' : foreign ? 'foreign' : 'cash'
-  item.includeInAssets = behavior !== 'liability'
-  item.liquidity = behavior === 'liability' ? 'locked' : behavior === 'cash' ? 'available' : item.liquidity === 'locked' ? 'locked' : 'available'
-  item.currency = foreign ? (item.currency || 'USD') : 'TWD'
-  item.exchangeRate = foreign ? Number(item.exchangeRate || 0) : 1
-  item.order = Number.isFinite(Number(item.order)) ? Number(item.order) : fallbackOrder
-  delete item.assetClassDetail
-  return item
+  return {
+    id: String(input.id || ''),
+    groupId: String(input.groupId || ''),
+    name: clipString(input.name, CONFIG_LIMITS.maxNameLength),
+    behavior,
+    assetClass: behavior === 'liability' ? 'liability' : foreign ? 'foreign' : 'cash',
+    includeInAssets: behavior !== 'liability',
+    liquidity: behavior === 'liability' ? 'locked' : behavior === 'cash' ? 'available' : input.liquidity === 'locked' ? 'locked' : 'available',
+    amount: Math.max(0, finiteNumber(input.amount)),
+    currency: foreign ? (['USD', 'JPY'].includes(input.currency) ? input.currency : 'USD') : 'TWD',
+    exchangeRate: foreign ? Math.max(0, finiteNumber(input.exchangeRate)) : 1,
+    order: Number.isFinite(Number(input.order)) ? Number(input.order) : fallbackOrder,
+    archived: Boolean(input.archived),
+    system: Boolean(input.system)
+  }
+}
+
+function normalizeGroup(input = {}, fallbackOrder = 0) {
+  return {
+    id: String(input.id || ''),
+    name: clipString(input.name || '未命名群組', CONFIG_LIMITS.maxNameLength),
+    order: Number.isFinite(Number(input.order)) ? Number(input.order) : fallbackOrder,
+    archived: Boolean(input.archived),
+    system: Boolean(input.system)
+  }
+}
+
+function normalizeCashDraft(input = {}) {
+  return {
+    expectedAmount: finiteNumber(input.expectedAmount ?? input.baseAmount),
+    rows: limitArray(input.rows, CONFIG_LIMITS.maxCashDraftRows).map((row) => ({
+      label: clipString(row?.label, CONFIG_LIMITS.maxNameLength),
+      operation: row?.operation === 'subtract' ? 'subtract' : 'add',
+      amount: Math.max(0, finiteNumber(row?.amount))
+    }))
+  }
+}
+
+function normalizeCashDrafts(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return {}
+  const drafts = {}
+  for (const [accountId, draft] of Object.entries(input).slice(0, CONFIG_LIMITS.maxCashDrafts)) {
+    if (!accountId || accountId === '__proto__' || accountId === 'constructor' || accountId === 'prototype') continue
+    if (!draft || typeof draft !== 'object' || Array.isArray(draft)) continue
+    drafts[String(accountId)] = normalizeCashDraft(draft)
+  }
+  return drafts
+}
+
+function normalizeHolding(input = {}, fallbackOrder = 0) {
+  const leverageInput = Number(input.leverage ?? input.multiplier)
+  const inverse = input.direction === 'inverse'
+  const leverage = Number.isFinite(leverageInput) ? Math.trunc(leverageInput) : 1
+  return {
+    id: String(input.id || ''),
+    ticker: normalizeTicker(input.ticker),
+    name: clipString(input.name, CONFIG_LIMITS.maxNameLength),
+    market: ['TWSE', 'TPEx'].includes(input.market) ? input.market : '',
+    quantity: Math.max(0, finiteNumber(input.quantity)),
+    assetClass: input.assetClass === 'bond' ? 'bond' : 'equity',
+    leverage: inverse ? -Math.abs(leverage) : leverage,
+    price: Math.max(0, finiteNumber(input.price)),
+    priceSource: input.priceSource === 'manual' ? 'manual' : 'auto',
+    priceAsOfDate: typeof input.priceAsOfDate === 'string' ? clipString(input.priceAsOfDate, 32) || null : null,
+    priceSourceLabel: clipString(input.priceSourceLabel || '', CONFIG_LIMITS.maxNameLength),
+    liquidity: input.liquidity === 'locked' ? 'locked' : 'convertible',
+    order: Number.isFinite(Number(input.order)) ? Number(input.order) : fallbackOrder,
+    archived: Boolean(input.archived)
+  }
+}
+
+function normalizeSnapshot(input = {}) {
+  const snapshot = {
+    date: clipString(input.date, 32),
+    verifiedAt: typeof input.verifiedAt === 'string' ? clipString(input.verifiedAt, 64) : null,
+    note: clipString(input.note || '', CONFIG_LIMITS.maxNoteLength)
+  }
+  for (const key of SNAPSHOT_NUMBER_KEYS) {
+    if (input[key] == null || input[key] === '') continue
+    snapshot[key] = finiteNumber(input[key])
+  }
+  return snapshot
+}
+
+function normalizeMarket(input = {}, defaults) {
+  const fxRates = { TWD: 1 }
+  for (const currency of ['USD', 'JPY']) {
+    const rate = finiteNumber(input?.fxRates?.[currency], NaN)
+    if (Number.isFinite(rate) && rate > 0) fxRates[currency] = rate
+  }
+  return {
+    taiex: input?.taiex == null ? null : finiteNumber(input.taiex),
+    ma240: input?.ma240 == null ? null : finiteNumber(input.ma240),
+    lastUpdatedAt: typeof input?.lastUpdatedAt === 'string' ? clipString(input.lastUpdatedAt, 64) : null,
+    source: clipString(input?.source || defaults.source, 120) || defaults.source,
+    fxRates,
+    fxUpdatedAt: typeof input?.fxUpdatedAt === 'string' ? clipString(input.fxUpdatedAt, 64) : null,
+    fxNextUpdateAt: typeof input?.fxNextUpdateAt === 'string' ? clipString(input.fxNextUpdateAt, 64) : null,
+    fxSource: typeof input?.fxSource === 'string' ? clipString(input.fxSource, 120) : null
+  }
+}
+
+function normalizeSettings(input = {}, defaults) {
+  return {
+    baseCurrency: 'TWD',
+    snapshotDisplayLimit: Math.min(365, Math.max(1, Math.trunc(finiteNumber(input.snapshotDisplayLimit, defaults.snapshotDisplayLimit)))),
+    cashReconciliationEnabled: input.cashReconciliationEnabled !== false,
+    lastSavedAt: typeof input.lastSavedAt === 'string' ? clipString(input.lastSavedAt, 64) : null
+  }
+}
+
+function normalizeRecurringCashflowItem(input = {}, fallbackOrder = 0) {
+  return {
+    id: String(input.id || ''),
+    name: clipString(input.name, CONFIG_LIMITS.maxNameLength),
+    type: input.type === 'expense' ? 'expense' : 'income',
+    amount: Math.max(0, finiteNumber(input.amount)),
+    frequency: ['monthly', 'quarterly', 'semiannual', 'annual'].includes(input.frequency) ? input.frequency : 'monthly',
+    occurrenceMonth: Math.min(12, Math.max(1, Math.trunc(finiteNumber(input.occurrenceMonth, 1)))),
+    order: Number.isFinite(Number(input.order)) ? Number(input.order) : fallbackOrder
+  }
+}
+
+export function assertConfigCollectionLimits(input = {}) {
+  const checks = [
+    ['groups', CONFIG_LIMITS.maxGroups],
+    ['items', CONFIG_LIMITS.maxItems],
+    ['holdings', CONFIG_LIMITS.maxHoldings],
+    ['snapshots', CONFIG_LIMITS.maxSnapshots],
+    ['recurringCashflowItems', CONFIG_LIMITS.maxRecurringCashflowItems]
+  ]
+  for (const [key, max] of checks) {
+    if (Array.isArray(input[key]) && input[key].length > max) {
+      throw new Error(`備份的 ${key} 超過上限（最多 ${max} 筆）。`)
+    }
+  }
+  if (input.cashDrafts && typeof input.cashDrafts === 'object' && !Array.isArray(input.cashDrafts)
+    && Object.keys(input.cashDrafts).length > CONFIG_LIMITS.maxCashDrafts) {
+    throw new Error(`備份的現金驗算草稿超過上限（最多 ${CONFIG_LIMITS.maxCashDrafts} 筆）。`)
+  }
 }
 
 export function normalizeConfig(input) {
   const defaults = createDefaultConfig()
   if (!input || typeof input !== 'object' || Array.isArray(input)) return defaults
-  const currentSettings = { ...(input.settings || {}) }
-  delete currentSettings.allocationTargets
-  const cashReconciliationEnabled = currentSettings.cashReconciliationEnabled !== false
-  const groups = (Array.isArray(input.groups) ? input.groups : defaults.groups).map((group) => ({ ...group }))
+  const settings = normalizeSettings(input.settings || {}, defaults.settings)
+  const cashReconciliationEnabled = settings.cashReconciliationEnabled
+  const groups = limitArray(input.groups ?? defaults.groups, CONFIG_LIMITS.maxGroups)
+    .map((group, index) => normalizeGroup(group, index))
   let cashGroup = groups.find((group) => group.id === SYSTEM_CASH_GROUP_ID)
   const usesLegacyDefaultOrder = Number(input.version || 0) < CONFIG_VERSION
     && (matchesGroupOrder(groups, LEGACY_DEFAULT_GROUP_ORDERS)
@@ -104,7 +266,7 @@ export function normalizeConfig(input) {
     }
   }
 
-  const items = (Array.isArray(input.items) ? input.items : defaults.items).map(normalizeAccountItem)
+  const items = limitArray(input.items ?? defaults.items, CONFIG_LIMITS.maxItems).map(normalizeAccountItem)
   let cashItem = items.find((item) => item.id === SYSTEM_CASH_ITEM_ID)
   if (cashReconciliationEnabled) {
     if (!cashItem) {
@@ -128,48 +290,19 @@ export function normalizeConfig(input) {
     cashItem.system = false
     if (cashItem.behavior === 'cash') Object.assign(cashItem, normalizeAccountItem({ ...cashItem, behavior: 'manual' }))
   }
+
   return {
-    ...defaults,
-    ...input,
     version: CONFIG_VERSION,
-    settings: {
-      ...defaults.settings,
-      ...currentSettings
-    },
+    settings,
     groups,
     items,
-    cashDrafts: input.cashDrafts && typeof input.cashDrafts === 'object' && !Array.isArray(input.cashDrafts) ? input.cashDrafts : {},
-    recurringCashflowItems: (Array.isArray(input.recurringCashflowItems) ? input.recurringCashflowItems : []).map((item, index) => ({
-      ...item,
-      name: String(item.name || '').trim(),
-      type: item.type === 'expense' ? 'expense' : 'income',
-      amount: Math.max(0, Number(item.amount || 0)),
-      frequency: ['monthly', 'quarterly', 'semiannual', 'annual'].includes(item.frequency) ? item.frequency : 'monthly',
-      occurrenceMonth: Math.min(12, Math.max(1, Math.trunc(Number(item.occurrenceMonth || 1)))),
-      order: Number.isFinite(Number(item.order)) ? Number(item.order) : index
-    })),
-    holdings: (Array.isArray(input.holdings) ? input.holdings : []).map((holding, index) => {
-      const currentHolding = { ...holding }
-      const leverageInput = Number(currentHolding.leverage ?? currentHolding.multiplier)
-      const inverse = currentHolding.direction === 'inverse'
-      delete currentHolding.multiplier
-      delete currentHolding.direction
-      delete currentHolding.includeInAssets
-      delete currentHolding.assetClassDetail
-      const leverage = Number.isFinite(leverageInput) ? Math.trunc(leverageInput) : 1
-      return {
-        ...currentHolding,
-        assetClass: currentHolding.assetClass === 'bond' ? 'bond' : 'equity',
-        leverage: inverse ? -Math.abs(leverage) : leverage,
-        order: Number.isFinite(Number(holding.order)) ? Number(holding.order) : index
-      }
-    }),
-    snapshots: Array.isArray(input.snapshots) ? input.snapshots : [],
-    market: {
-      ...defaults.market,
-      ...(input.market || {}),
-      fxRates: { ...defaults.market.fxRates, ...(input.market?.fxRates || {}) }
-    }
+    cashDrafts: normalizeCashDrafts(input.cashDrafts),
+    recurringCashflowItems: limitArray(input.recurringCashflowItems, CONFIG_LIMITS.maxRecurringCashflowItems)
+      .map((item, index) => normalizeRecurringCashflowItem(item, index)),
+    holdings: limitArray(input.holdings, CONFIG_LIMITS.maxHoldings)
+      .map((holding, index) => normalizeHolding(holding, index)),
+    snapshots: limitArray(input.snapshots, CONFIG_LIMITS.maxSnapshots).map(normalizeSnapshot),
+    market: normalizeMarket(input.market || {}, defaults.market)
   }
 }
 
@@ -269,8 +402,9 @@ export function calculateSummary(config) {
 
 export function upsertSnapshot(snapshots, snapshot) {
   const result = [...(snapshots || [])]
-  const index = result.findIndex((entry) => entry.date === snapshot.date)
-  if (index >= 0) result[index] = snapshot
-  else result.push(snapshot)
+  const normalized = normalizeSnapshot(snapshot)
+  const index = result.findIndex((entry) => entry.date === normalized.date)
+  if (index >= 0) result[index] = normalized
+  else result.push(normalized)
   return result.sort((a, b) => a.date.localeCompare(b.date))
 }

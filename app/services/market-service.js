@@ -1,3 +1,5 @@
+import { normalizeTicker } from './money-domain'
+
 const TWSE_STOCK_URL = 'https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL'
 const TWSE_INDEX_URL = 'https://openapi.twse.com.tw/v1/exchangeReport/MI_INDEX'
 const TWSE_MARKET_HISTORY_URL = 'https://www.twse.com.tw/exchangeReport/FMTQIK?response=json'
@@ -9,10 +11,33 @@ const LOCAL_MARKET_URL = '/data/market-summary.json'
 let instrumentCache = null
 let instrumentCacheExpiresAt = 0
 const latestPriceCache = new Map()
+const PRICE_CACHE_LIMIT = 200
+const MARKET_FETCH_CONCURRENCY = 4
 
 const toNumber = (value) => {
   const number = Number(String(value ?? '').replaceAll(',', '').replace('--', ''))
   return Number.isFinite(number) ? number : null
+}
+
+async function mapWithConcurrency(items, concurrency, worker) {
+  const results = new Array(items.length)
+  let nextIndex = 0
+  const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex
+      nextIndex += 1
+      results[index] = await worker(items[index], index)
+    }
+  })
+  await Promise.all(runners)
+  return results
+}
+
+function rememberLatestPrice(ticker, value) {
+  latestPriceCache.set(ticker, { value, expiresAt: Date.now() + 5 * 60 * 1000 })
+  if (latestPriceCache.size <= PRICE_CACHE_LIMIT) return
+  const oldestKey = latestPriceCache.keys().next().value
+  if (oldestKey != null) latestPriceCache.delete(oldestKey)
 }
 
 async function fetchJson(url, options = {}) {
@@ -58,17 +83,23 @@ const taipeiDate = (date) => new Intl.DateTimeFormat('sv-SE', {
   timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit'
 }).format(date)
 
-const yahooQuoteUrl = (ticker, market) => `https://tw.stock.yahoo.com/quote/${ticker}.${market === 'TPEx' ? 'TWO' : 'TW'}`
+export function yahooQuoteUrl(ticker, market) {
+  const normalized = normalizeTicker(ticker)
+  if (!normalized) return ''
+  return `https://tw.stock.yahoo.com/quote/${encodeURIComponent(normalized)}.${market === 'TPEx' ? 'TWO' : 'TW'}`
+}
 
 async function fetchLatestPrice(ticker) {
-  const cached = latestPriceCache.get(ticker)
+  const normalized = normalizeTicker(ticker)
+  if (!normalized) throw new Error('商品代號無效。')
+  const cached = latestPriceCache.get(normalized)
   if (cached && cached.expiresAt > Date.now()) return cached.value
 
   const start = new Date()
   start.setDate(start.getDate() - 14)
   const query = new URLSearchParams({
     dataset: 'TaiwanStockPrice',
-    data_id: ticker,
+    data_id: normalized,
     start_date: taipeiDate(start),
     end_date: taipeiDate(new Date())
   })
@@ -77,12 +108,12 @@ async function fetchLatestPrice(ticker) {
     throw new Error(payload?.msg || 'FinMind 沒有回傳可用資料。')
   }
   const latest = payload.data
-    .filter((row) => String(row.stock_id || '').toUpperCase() === ticker && toNumber(row.close) > 0)
+    .filter((row) => String(row.stock_id || '').toUpperCase() === normalized && toNumber(row.close) > 0)
     .sort((a, b) => String(a.date).localeCompare(String(b.date)))
     .at(-1)
-  if (!latest) throw new Error(`FinMind 查不到 ${ticker} 最近的收盤價。`)
+  if (!latest) throw new Error(`FinMind 查不到 ${normalized} 最近的收盤價。`)
   const value = { price: toNumber(latest.close), marketDate: toMarketDate(latest.date) }
-  latestPriceCache.set(ticker, { value, expiresAt: Date.now() + 5 * 60 * 1000 })
+  rememberLatestPrice(normalized, value)
   return value
 }
 
@@ -164,7 +195,7 @@ async function fetchInstrumentCatalog() {
 }
 
 export async function lookupMarketInstrument(input) {
-  const ticker = String(input || '').trim().toUpperCase()
+  const ticker = normalizeTicker(input)
   if (!ticker) throw new Error('請先輸入股票或商品代號。')
   const { instruments, warnings, hasLocalCatalog } = await fetchInstrumentCatalog()
   const instrument = instruments.get(ticker)
@@ -206,14 +237,19 @@ export async function fetchMarketPreview(tickers = []) {
   let taiex = null
   try {
     const catalog = await fetchInstrumentCatalog()
-    const wanted = new Set(tickers.map((ticker) => ticker.toUpperCase()))
-    const latestResults = await Promise.allSettled([...wanted].map(async (ticker) => ({ ticker, latest: await fetchLatestPrice(ticker) })))
+    const wanted = [...new Set(tickers.map((ticker) => normalizeTicker(ticker)).filter(Boolean))]
+    const latestResults = await mapWithConcurrency(wanted, MARKET_FETCH_CONCURRENCY, async (ticker) => {
+      try {
+        return { status: 'fulfilled', ticker, latest: await fetchLatestPrice(ticker) }
+      } catch (error) {
+        return { status: 'rejected', ticker, reason: error }
+      }
+    })
     for (const result of latestResults) {
       if (result.status !== 'fulfilled') continue
-      const { ticker, latest } = result.value
-      prices[ticker] = latest.price
-      priceDates[ticker] = latest.marketDate
-      priceSources[ticker] = 'FinMind 公開日行情'
+      prices[result.ticker] = result.latest.price
+      priceDates[result.ticker] = result.latest.marketDate
+      priceSources[result.ticker] = 'FinMind 公開日行情'
     }
     if (!catalog.hasLocalCatalog) warnings.push(...catalog.warnings)
     for (const ticker of wanted) {

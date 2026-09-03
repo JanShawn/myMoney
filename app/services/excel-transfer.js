@@ -6,9 +6,33 @@ const headers = [
   ['ma240', '240MA'], ['note', '備註']
 ]
 
+const NUMBER_KEYS = new Set([
+  'totalAssets', 'totalLiabilities', 'netWorth', 'availableCash', 'totalStocks', 'stockRatio',
+  'totalBonds', 'bondRatio', 'totalCash', 'totalForeign', 'taiex', 'ma240'
+])
+
 async function loadExcelJS() {
   const excelModule = await import('exceljs')
   return excelModule.default || excelModule
+}
+
+function sanitizeExcelText(value) {
+  const text = String(value ?? '')
+  return /^[=+\-@]/.test(text) ? `'${text}` : text
+}
+
+function snapshotRow(snapshot) {
+  const row = {
+    date: sanitizeExcelText(snapshot.date),
+    verifiedAt: sanitizeExcelText(snapshot.verifiedAt),
+    note: sanitizeExcelText(snapshot.note),
+    availableCash: snapshot.availableCash ?? (Number(snapshot.totalCash || 0) + Number(snapshot.totalForeign || 0))
+  }
+  for (const key of NUMBER_KEYS) {
+    if (key === 'availableCash') continue
+    row[key] = Number.isFinite(Number(snapshot[key])) ? Number(snapshot[key]) : null
+  }
+  return row
 }
 
 export async function exportSnapshotsToExcel(snapshots) {
@@ -19,10 +43,7 @@ export async function exportSnapshotsToExcel(snapshots) {
   const headerRow = sheet.getRow(1)
   headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } }
   headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F766E' } }
-  snapshots.forEach((snapshot) => sheet.addRow({
-    ...snapshot,
-    availableCash: snapshot.availableCash ?? (Number(snapshot.totalCash || 0) + Number(snapshot.totalForeign || 0))
-  }))
+  snapshots.forEach((snapshot) => sheet.addRow(snapshotRow(snapshot)))
   for (let row = 2; row <= sheet.rowCount; row += 1) {
     for (const col of [3, 4, 5, 6, 7, 9, 11]) sheet.getRow(row).getCell(col).numFmt = '#,##0.00'
     for (const col of [8, 10]) sheet.getRow(row).getCell(col).numFmt = '0.00%'

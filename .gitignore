@@ -2,12 +2,12 @@ node_modules/
 .nuxt/
 .output/
 dist/
-data/config.json
-data/*.xlsx
-data/backups/
-/data.json
-/myMoney-data*.json
-/myMoney-backup-*.json
 .env
 *.log
 .DS_Store
+
+# 本機誤存的備份／匯出檔（正式範例請放 examples/）
+/data.json
+/myMoney-data*.json
+/myMoney-backup-*.json
+*.xlsx

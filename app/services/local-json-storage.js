@@ -1,4 +1,4 @@
-import { createDefaultConfig, normalizeConfig } from './money-domain'
+import { assertConfigCollectionLimits, CONFIG_LIMITS, createDefaultConfig, normalizeConfig } from './money-domain'
 
 const DB_NAME = 'mymoney-local'
 const STORE_NAME = 'key-value'
@@ -9,6 +9,19 @@ const JSON_BACKUP_META_KEY = 'json-backup-meta'
 const JSON_BACKUP_DATA_KEY = 'json-backup-data'
 const BACKUPS_KEY = 'json-backups'
 const BACKUP_LIMIT = 3
+
+function parseJsonText(text, fileName = 'JSON') {
+  let parsed
+  try {
+    parsed = JSON.parse(text, (key, value) => {
+      if (key === '__proto__' || key === 'constructor' || key === 'prototype') return undefined
+      return value
+    })
+  } catch {
+    throw new Error(`無法讀取「${fileName}」：檔案不是有效的 JSON 格式。`)
+  }
+  return parsed
+}
 
 function toPlainConfig(input) {
   return normalizeConfig(JSON.parse(JSON.stringify(input ?? null)))
@@ -238,19 +251,22 @@ function validateJsonConfig(parsed, fileName = 'JSON') {
   const hasKnownData = isObject && (
     'version' in parsed || 'settings' in parsed || Array.isArray(parsed.groups)
     || Array.isArray(parsed.items) || Array.isArray(parsed.holdings) || Array.isArray(parsed.snapshots)
+    || Array.isArray(parsed.recurringCashflowItems)
   )
   if (!hasKnownData) throw new Error(`「${fileName}」不是 myMoney 完整備份，未找到帳戶、持倉或設定資料。`)
+  assertConfigCollectionLimits(parsed)
   return normalizeConfig(parsed)
 }
 
 async function parseJsonFile(file) {
-  let parsed
-  try {
-    parsed = JSON.parse(await file.text())
-  } catch {
-    throw new Error(`無法讀取「${file.name}」：檔案不是有效的 JSON 格式。`)
+  if (Number(file?.size) > CONFIG_LIMITS.maxJsonBytes) {
+    throw new Error(`「${file.name}」太大（上限 ${Math.round(CONFIG_LIMITS.maxJsonBytes / (1024 * 1024))} MB）。`)
   }
-  return validateJsonConfig(parsed, file.name)
+  const text = await file.text()
+  if (text.length > CONFIG_LIMITS.maxJsonBytes) {
+    throw new Error(`「${file.name}」太大（上限 ${Math.round(CONFIG_LIMITS.maxJsonBytes / (1024 * 1024))} MB）。`)
+  }
+  return validateJsonConfig(parseJsonText(text, file.name), file.name)
 }
 
 async function getBackupStatus(currentInput) {

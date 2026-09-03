@@ -39,6 +39,7 @@ export const useMoneyStore = defineStore('money', () => {
   const lastSnapshot = computed(() => snapshots.value.at(-1) || null)
   const cloneConfig = (value) => structuredClone(toRaw(value))
   const cashReconciliationIsEnabled = (draft) => draft.settings?.cashReconciliationEnabled !== false
+  let runQueue = Promise.resolve()
 
   function applyStorageResult(result) {
     config.value = normalizeConfig(result.data)
@@ -51,6 +52,10 @@ export const useMoneyStore = defineStore('money', () => {
   }
 
   async function run(action) {
+    const previous = runQueue
+    let release
+    runQueue = new Promise((resolve) => { release = resolve })
+    await previous
     saving.value = true
     error.value = ''
     try {
@@ -60,6 +65,7 @@ export const useMoneyStore = defineStore('money', () => {
       throw actionError
     } finally {
       saving.value = false
+      release()
     }
   }
 
@@ -102,7 +108,12 @@ export const useMoneyStore = defineStore('money', () => {
     if (!group) throw new Error('找不到這個群組')
     if (cashReconciliationIsEnabled(draft) && id === SYSTEM_CASH_GROUP_ID && body.archived === true) throw new Error('「現金」是現金驗算使用的系統群組，不能封存。')
     if (cashReconciliationIsEnabled(draft) && id === SYSTEM_CASH_GROUP_ID && body.name && body.name !== '現金') throw new Error('「現金」是系統群組，名稱不能變更。')
-    Object.assign(group, body)
+    const allowed = {}
+    for (const key of ['name', 'order', 'archived']) {
+      if (Object.hasOwn(body, key)) allowed[key] = body[key]
+    }
+    if ('name' in allowed) allowed.name = String(allowed.name || '').trim()
+    Object.assign(group, allowed)
     if (body.archived === true) draft.items.filter((item) => item.groupId === id).forEach((item) => { item.archived = true })
     return group
   })
@@ -111,7 +122,18 @@ export const useMoneyStore = defineStore('money', () => {
     const nextOrder = draft.items
       .filter((item) => item.groupId === body.groupId && !item.archived)
       .reduce((highest, item) => Math.max(highest, Number(item.order ?? -1)), -1) + 1
-    const item = normalizeAccountItem({ id: crypto.randomUUID(), ...body, order: nextOrder, archived: false })
+    const item = normalizeAccountItem({
+      id: crypto.randomUUID(),
+      groupId: body.groupId,
+      name: body.name,
+      behavior: body.behavior,
+      amount: body.amount,
+      currency: body.currency,
+      exchangeRate: body.exchangeRate,
+      liquidity: body.liquidity,
+      order: nextOrder,
+      archived: false
+    })
     draft.items.push(item)
     return item
   })
@@ -121,14 +143,16 @@ export const useMoneyStore = defineStore('money', () => {
     if (!item) throw new Error('找不到這個項目')
     if (cashReconciliationIsEnabled(draft) && id === SYSTEM_CASH_ITEM_ID && body.archived === true) throw new Error('「身上現金」與現金驗算連動，不能封存。')
     if (cashReconciliationIsEnabled(draft) && id === SYSTEM_CASH_ITEM_ID && body.groupId && body.groupId !== SYSTEM_CASH_GROUP_ID) throw new Error('系統現金帳戶必須保留在「現金」群組。')
-    const changes = { ...body }
+    const changes = {}
+    for (const key of ['groupId', 'name', 'behavior', 'amount', 'currency', 'exchangeRate', 'liquidity', 'order', 'archived']) {
+      if (Object.hasOwn(body, key)) changes[key] = body[key]
+    }
     if (changes.groupId && changes.groupId !== item.groupId && !('order' in changes)) {
       changes.order = draft.items
         .filter((entry) => entry.id !== id && entry.groupId === changes.groupId && !entry.archived)
         .reduce((highest, entry) => Math.max(highest, Number(entry.order ?? -1)), -1) + 1
     }
-    Object.assign(item, changes)
-    Object.assign(item, normalizeAccountItem(item))
+    Object.assign(item, normalizeAccountItem({ ...item, ...changes }))
     if (cashReconciliationIsEnabled(draft) && id === SYSTEM_CASH_ITEM_ID) Object.assign(item, { groupId: SYSTEM_CASH_GROUP_ID, behavior: 'cash', assetClass: 'cash', liquidity: 'available', includeInAssets: true, currency: 'TWD', exchangeRate: 1, archived: false, system: true })
     return item
   })
@@ -176,10 +200,22 @@ export const useMoneyStore = defineStore('money', () => {
     const leverage = Number(body.leverage)
     if (!Number.isInteger(leverage)) throw new Error('商品槓桿倍數必須是整數。')
     const nextOrder = draft.holdings.reduce((highest, holding) => Math.max(highest, Number(holding.order ?? -1)), -1) + 1
-    const holding = { id: crypto.randomUUID(), ...body, ticker: body.ticker.toUpperCase(), assetClass: body.assetClass === 'bond' ? 'bond' : 'equity', leverage, order: nextOrder, archived: false }
-    delete holding.direction
-    delete holding.includeInAssets
-    delete holding.assetClassDetail
+    const holding = {
+      id: crypto.randomUUID(),
+      ticker: String(body.ticker || '').toUpperCase(),
+      name: String(body.name || '').trim(),
+      market: ['TWSE', 'TPEx'].includes(body.market) ? body.market : '',
+      quantity: Number(body.quantity || 0),
+      assetClass: body.assetClass === 'bond' ? 'bond' : 'equity',
+      leverage,
+      price: Number(body.price || 0),
+      priceSource: body.priceSource === 'manual' ? 'manual' : 'auto',
+      priceAsOfDate: body.priceAsOfDate || null,
+      priceSourceLabel: body.priceSourceLabel || '',
+      liquidity: body.liquidity === 'locked' ? 'locked' : 'convertible',
+      order: nextOrder,
+      archived: false
+    }
     draft.holdings.push(holding)
     return holding
   })
@@ -187,17 +223,19 @@ export const useMoneyStore = defineStore('money', () => {
   const updateHolding = (id, body) => mutate((draft) => {
     const holding = draft.holdings.find((entry) => entry.id === id)
     if (!holding) throw new Error('找不到這筆持倉')
-    const changes = { ...body }
-    if ('leverage' in changes) {
-      const leverage = Number(changes.leverage)
-      if (!Number.isInteger(leverage)) throw new Error('商品槓桿倍數必須是整數。')
-      changes.leverage = leverage
+    const allowed = {}
+    for (const key of ['ticker', 'name', 'market', 'quantity', 'assetClass', 'leverage', 'price', 'priceSource', 'priceAsOfDate', 'priceSourceLabel', 'liquidity', 'order', 'archived']) {
+      if (Object.hasOwn(body, key)) allowed[key] = body[key]
     }
-    delete changes.direction
-    delete changes.includeInAssets
-    delete changes.assetClassDetail
-    if ('assetClass' in changes) changes.assetClass = changes.assetClass === 'bond' ? 'bond' : 'equity'
-    Object.assign(holding, changes)
+    if ('leverage' in allowed) {
+      const leverage = Number(allowed.leverage)
+      if (!Number.isInteger(leverage)) throw new Error('商品槓桿倍數必須是整數。')
+      allowed.leverage = leverage
+    }
+    if ('assetClass' in allowed) allowed.assetClass = allowed.assetClass === 'bond' ? 'bond' : 'equity'
+    if ('ticker' in allowed) allowed.ticker = String(allowed.ticker || '').toUpperCase()
+    Object.assign(holding, allowed)
+    delete holding.yahooUrl
     delete holding.includeInAssets
     delete holding.direction
     delete holding.assetClassDetail
@@ -226,8 +264,12 @@ export const useMoneyStore = defineStore('money', () => {
   })
 
   const updateSettings = (body) => mutate((draft) => {
-    Object.assign(draft.settings, body)
-    if (Object.hasOwn(body, 'cashReconciliationEnabled')) Object.assign(draft, normalizeConfig(draft))
+    const allowed = {}
+    for (const key of ['baseCurrency', 'snapshotDisplayLimit', 'cashReconciliationEnabled', 'lastSavedAt']) {
+      if (Object.hasOwn(body, key)) allowed[key] = body[key]
+    }
+    Object.assign(draft.settings, allowed)
+    if (Object.hasOwn(allowed, 'cashReconciliationEnabled')) Object.assign(draft, normalizeConfig(draft))
     return draft.settings
   })
 
@@ -349,7 +391,7 @@ export const useMoneyStore = defineStore('money', () => {
           holding.priceSource = 'auto'
           holding.priceAsOfDate = result.priceDates?.[holding.ticker] || null
           holding.priceSourceLabel = result.priceSources?.[holding.ticker] || '自動價格'
-          holding.yahooUrl = result.yahooUrls?.[holding.ticker] || holding.yahooUrl || null
+          delete holding.yahooUrl
         }
       }
       try {

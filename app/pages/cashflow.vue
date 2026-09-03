@@ -75,14 +75,13 @@ const monthItems = computed(() => store.recurringCashflowItems.filter((item) => 
 const monthIncomeCount = computed(() => monthItems.value.filter((item) => item.type === 'income').length)
 const monthExpenseCount = computed(() => monthItems.value.filter((item) => item.type === 'expense').length)
 const monthlyPlan = computed(() => calculateRecurringCashflowForMonth(store.recurringCashflowItems, selectedMonth.value))
-const selectedItems = computed(() => store.recurringCashflowItems.filter((item) => selectedItemIds.value.includes(item.id)))
-const selectedPlan = computed(() => calculateRecurringCashflow(selectedItems.value))
-const selectedMonthlyResult = computed(() => store.cashflowPlan.monthlyNetCashflow - selectedPlan.value.monthlyNetCashflow)
+const remainingPlan = computed(() => calculateRecurringCashflow(
+  store.recurringCashflowItems.filter((item) => !selectedItemIds.value.includes(item.id))
+))
 
 const money = (value) => new Intl.NumberFormat('zh-TW', {
   style: 'currency', currency: 'TWD', minimumFractionDigits: 0, maximumFractionDigits: 2
 }).format(Number(value || 0))
-const signedMoney = (value) => `${Number(value) > 0 ? '+' : Number(value) < 0 ? '−' : ''}${money(Math.abs(Number(value || 0)))}`
 
 function toggleSelectionMode() {
   selectionMode.value = !selectionMode.value
@@ -321,17 +320,36 @@ watch(() => store.recurringCashflowItems.map((item) => item.id), (itemIds) => {
         <template v-if="store.recurringCashflowItems.length">
           <section v-if="selectionMode" class="scenario-panel" aria-live="polite">
             <div class="scenario-panel__header">
-              <div><strong>選取項目試算</strong><span>以下以月均金額計算，不會刪除或修改項目。</span></div>
+              <div><strong>選取項目試算</strong><span>{{ selectedItemIds.length ? `已選 ${selectedItemIds.length} 筆；以下呈現排除前後的月均變化。` : '以下以月均金額計算，不會刪除或修改項目。' }}</span></div>
               <button v-if="selectedItemIds.length" class="btn btn-ghost" type="button" @click="selectedItemIds = []">清除選取</button>
             </div>
-            <p v-if="!selectedItemIds.length" class="scenario-panel__empty">從下方收入或支出勾選幾筆，即可看到這些項目的月均影響。</p>
+            <p v-if="!selectedItemIds.length" class="scenario-panel__empty">從下方收入或支出勾選幾筆，即可比較排除前後的月均變化。</p>
             <template v-else>
               <div class="scenario-summary">
-                <div><small>已選項目</small><strong>{{ selectedItemIds.length }} 筆</strong></div>
-                <div><small>月均選取收入</small><strong>{{ money(selectedPlan.monthlyIncome) }}</strong></div>
-                <div><small>月均選取支出</small><strong>{{ money(selectedPlan.monthlyExpense) }}</strong></div>
-                <div><small>月均淨影響</small><strong>{{ signedMoney(selectedPlan.monthlyNetCashflow) }}</strong></div>
-                <div class="scenario-summary__result"><small>排除選取後的整體月均結果</small><strong>{{ money(selectedMonthlyResult) }}</strong></div>
+                <div>
+                  <small>收入月均</small>
+                  <div class="scenario-summary__comparison">
+                    <span><em>目前</em><strong>{{ money(store.cashflowPlan.monthlyIncome) }}</strong></span>
+                    <b aria-hidden="true">→</b>
+                    <span><em>排除後</em><strong>{{ money(remainingPlan.monthlyIncome) }}</strong></span>
+                  </div>
+                </div>
+                <div>
+                  <small>支出月均</small>
+                  <div class="scenario-summary__comparison">
+                    <span><em>目前</em><strong>{{ money(store.cashflowPlan.monthlyExpense) }}</strong></span>
+                    <b aria-hidden="true">→</b>
+                    <span><em>排除後</em><strong>{{ money(remainingPlan.monthlyExpense) }}</strong></span>
+                  </div>
+                </div>
+                <div class="scenario-summary__result">
+                  <small>月均收支淨額</small>
+                  <div class="scenario-summary__comparison">
+                    <span><em>目前</em><strong>{{ money(store.cashflowPlan.monthlyNetCashflow) }}</strong></span>
+                    <b aria-hidden="true">→</b>
+                    <span><em>排除後</em><strong>{{ money(remainingPlan.monthlyNetCashflow) }}</strong></span>
+                  </div>
+                </div>
               </div>
             </template>
           </section>
@@ -456,10 +474,14 @@ watch(() => store.recurringCashflowItems.map((item) => item.id), (itemIds) => {
 .scenario-panel__header span, .scenario-panel__empty { color: var(--muted); font-size: .76rem; }
 .scenario-panel__header .btn { min-height: 34px; padding: 6px 9px; font-size: .76rem; }
 .scenario-panel__empty { margin: 0; padding: 12px; border: 1px dashed var(--border-strong); border-radius: 10px; background: var(--surface); text-align: center; }
-.scenario-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.scenario-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .scenario-summary > div { min-width: 0; display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
 .scenario-summary small { color: var(--muted); font-size: .72rem; }
 .scenario-summary strong { overflow: hidden; color: var(--text); font-size: .82rem; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+.scenario-summary__comparison { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: end; gap: 8px; }
+.scenario-summary__comparison span { min-width: 0; display: grid; gap: 2px; }
+.scenario-summary__comparison em { color: var(--muted); font-size: .66rem; font-style: normal; }
+.scenario-summary__comparison b { padding-bottom: 1px; color: var(--muted); font-size: .8rem; }
 .scenario-summary__result { border-color: var(--primary) !important; background: var(--surface) !important; }
 .scenario-summary__result strong { color: var(--primary); }
 .cashflow-group + .cashflow-group { border-top: 1px solid var(--border); }
@@ -511,7 +533,7 @@ watch(() => store.recurringCashflowItems.map((item) => item.id), (itemIds) => {
   .cashflow-page-actions .pill { flex: 1 1 100%; justify-content: center; }
   .scenario-panel { padding-inline: 18px; }
   .scenario-panel__header { align-items: flex-start; }
-  .scenario-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .scenario-summary { grid-template-columns: 1fr; }
   .cashflow-row { grid-template-columns: minmax(0, 1fr) auto; padding-inline: 18px; }
   .cashflow-row--sortable, .cashflow-row--selecting { grid-template-columns: 28px minmax(0, 1fr) auto; padding-left: 12px; }
   .cashflow-row__amount { display: none; }

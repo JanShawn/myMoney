@@ -4,6 +4,8 @@
 
 清新、安靜、容易長時間閱讀的個人財務工具。資訊密度適中，重點數字清楚，但不營造交易軟體的緊張感。
 
+實際色票與語意 token 以 `app/assets/css/main.css` 的 CSS 變數為準；本文件只描述設計意圖與共用元件約定。
+
 ## Colors
 
 | Token | Value | Usage |
@@ -31,7 +33,7 @@
 - `UiPanel`：內容面板、表單面板與資料清單容器，支援 flush 與 compact 模式。
 - `AppNotice`：info、success、warning、error 四種狀態訊息。
 - `EmptyState`：清單尚無資料時的統一引導。
-- `MetricCard`：總覽頁的核心數字卡片。
+- `MetricCard`：收支規劃等頁面的核心數字卡片。
 
 ## Interaction
 

@@ -65,10 +65,27 @@ describe('snapshot storage', () => {
     })
   })
 
-  it('保留每個現金帳戶的驗算草稿', () => {
-    const cashDrafts = { cash: { baseAmount: 100, rows: [{ label: '零錢', operation: 'add', amount: 25 }] } }
-    const config = normalizeConfig({ cashDrafts })
-    expect(config.cashDrafts).toEqual(cashDrafts)
+  it('保留每個現金帳戶的驗算草稿，並正規化為 expectedAmount', () => {
+    const config = normalizeConfig({
+      cashDrafts: { cash: { baseAmount: 100, rows: [{ label: '零錢', operation: 'add', amount: 25 }] } }
+    })
+    expect(config.cashDrafts).toEqual({
+      cash: { expectedAmount: 100, rows: [{ label: '零錢', operation: 'add', amount: 25 }] }
+    })
+  })
+
+  it('丟棄未知頂層欄位與持倉 yahooUrl', () => {
+    const config = normalizeConfig({
+      evil: { nested: true },
+      groups: [],
+      items: [],
+      holdings: [{ id: 'h1', ticker: '2330', yahooUrl: 'javascript:alert(1)', name: '台積電' }],
+      snapshots: [{ date: '2026-01-01', note: '=cmd|"/c calc"', netWorth: 1, unexpected: 99 }]
+    })
+    expect(config).not.toHaveProperty('evil')
+    expect(config.holdings[0]).not.toHaveProperty('yahooUrl')
+    expect(config.snapshots[0]).toMatchObject({ date: '2026-01-01', note: '=cmd|"/c calc"', netWorth: 1 })
+    expect(config.snapshots[0]).not.toHaveProperty('unexpected')
   })
 
   it('關閉現金驗算後，把系統現金轉回可自由管理的台幣帳戶', () => {

@@ -13,21 +13,21 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@lucide/vue": "latest",
-    "@pinia/nuxt": "latest",
-    "@tailwindcss/vite": "latest",
-    "chart.js": "latest",
-    "exceljs": "latest",
-    "nuxt": "^4.0.0",
-    "pinia": "latest",
-    "tailwindcss": "latest",
-    "vue": "latest",
-    "vue-chartjs": "latest",
-    "vue-router": "latest"
+    "@lucide/vue": "1.35.0",
+    "@pinia/nuxt": "1.0.2",
+    "@tailwindcss/vite": "4.3.3",
+    "chart.js": "4.5.1",
+    "exceljs": "4.4.0",
+    "nuxt": "4.5.2",
+    "pinia": "4.0.3",
+    "tailwindcss": "4.3.3",
+    "vue": "3.5.42",
+    "vue-chartjs": "5.3.4",
+    "vue-router": "5.3.0"
   },
   "devDependencies": {
-    "serve": "latest",
-    "vitest": "latest"
+    "serve": "14.2.6",
+    "vitest": "4.1.11"
   },
   "overrides": {
     "uuid": "^11.1.1"

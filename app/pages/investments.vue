@@ -1,5 +1,6 @@
 <script setup>
 import { CheckCircle2, ExternalLink, Pencil, RefreshCw, Search, Trash2 } from '@lucide/vue'
+import { yahooQuoteUrl } from '~/services/market-service'
 import { useMoneyStore } from '~/stores/money'
 
 const store = useMoneyStore()
@@ -37,6 +38,8 @@ const holdingTotalExposure = computed(() => store.activeHoldings.reduce((sum, ho
 const latestClosingDate = computed(() => store.activeHoldings.map((holding) => holding.priceAsOfDate).filter(Boolean).sort().at(-1) || '')
 const pendingDeleteHolding = computed(() => store.activeHoldings.find((holding) => holding.id === pendingDeleteHoldingId.value) || null)
 const sortLabels = { ticker: '代號', quantity: '股數', marketValue: '市值' }
+const holdingYahooUrl = (holding) => yahooQuoteUrl(holding.ticker, holding.market)
+const formYahooUrl = computed(() => yahooQuoteUrl(form.ticker, form.market) || lookup.yahooUrl)
 const displayedHoldings = computed(() => {
   const query = holdingQuery.value.trim().toLocaleLowerCase('zh-TW')
   const holdings = store.activeHoldings.filter((holding) => !query || `${holding.ticker} ${holding.name}`.toLocaleLowerCase('zh-TW').includes(query))
@@ -310,7 +313,7 @@ async function confirmDeleteHolding(holding) {
 
           <div v-if="lookup.status === 'success'" class="instrument-result" aria-live="polite">
             <CheckCircle2 :size="20" />
-            <div><strong>{{ form.ticker }} · {{ form.name }}</strong><span>最近收盤價 {{ priceMoney(form.price) }} · {{ lookup.source }} <a v-if="lookup.yahooUrl" :href="lookup.yahooUrl" target="_blank" rel="noreferrer">Yahoo 股市核對</a></span></div>
+            <div><strong>{{ form.ticker }} · {{ form.name }}</strong><span>最近收盤價 {{ priceMoney(form.price) }} · {{ lookup.source }} <a v-if="formYahooUrl" :href="formYahooUrl" target="_blank" rel="noreferrer">Yahoo 股市核對</a></span></div>
           </div>
 
           <AppNotice v-else-if="lookup.status === 'error'" tone="warning" title="無法取得商品資料">{{ lookup.message }}</AppNotice>
@@ -350,7 +353,7 @@ async function confirmDeleteHolding(holding) {
                 <div class="holding-meta">{{ holdingClassLabel(holding) }}</div>
               </div>
               <div class="data-row__actions">
-                <a v-if="holding.yahooUrl" class="btn btn-ghost btn-icon quote-action" :href="holding.yahooUrl" target="_blank" rel="noreferrer" :aria-label="`前往 Yahoo 股市核對 ${holding.name} 價格`" title="前往 Yahoo 股市核對價格"><ExternalLink :size="16" aria-hidden="true" /></a>
+                <a v-if="holdingYahooUrl(holding)" class="btn btn-ghost btn-icon quote-action" :href="holdingYahooUrl(holding)" target="_blank" rel="noreferrer" :aria-label="`前往 Yahoo 股市核對 ${holding.name} 價格`" title="前往 Yahoo 股市核對價格"><ExternalLink :size="16" aria-hidden="true" /></a>
                 <button class="btn btn-ghost btn-icon" type="button" :aria-label="`編輯 ${holding.name}`" :aria-expanded="expandedHoldingId === holding.id" :aria-controls="`holding-editor-${holding.id}`" @click="toggleHoldingEdit(holding.id)"><Pencil :size="17" /></button>
                 <button class="btn btn-ghost btn-icon delete-action" type="button" :aria-label="`刪除 ${holding.name}`" @click="requestDeleteHolding(holding.id)"><Trash2 :size="17" /></button>
               </div>
