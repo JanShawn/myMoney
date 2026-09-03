@@ -31,6 +31,7 @@ const liquidityHelp = (value) => ({
 }[value] || '')
 const currencyOptions = [{ value: 'USD', label: 'USD · 美金' }, { value: 'JPY', label: 'JPY · 日幣' }]
 const groups = computed(() => [...(store.config?.groups || [])].filter((g) => !g.archived).sort((a, b) => a.order - b.order))
+const cashReconciliationEnabled = computed(() => store.config?.settings?.cashReconciliationEnabled !== false)
 const groupOptions = computed(() => groups.value.map((group) => ({ value: group.id, label: group.name })))
 const pendingDeleteItem = computed(() => store.config?.items?.find((item) => item.id === pendingDeleteItemId.value) || null)
 const convertedAmount = (target) => Number(target?.amount || 0) * Number(target?.exchangeRate || 0)
@@ -171,8 +172,10 @@ async function saveEdit() {
     return
   }
   const { id, ...input } = editing.value
+  const changes = { ...input, amount: Number(input.amount || 0), exchangeRate: Number(input.exchangeRate || 1) }
+  if (editing.value.system && cashReconciliationEnabled.value) delete changes.amount
   try {
-    await store.updateItem(id, { ...input, amount: Number(input.amount || 0), exchangeRate: Number(input.exchangeRate || 1) })
+    await store.updateItem(id, changes)
     editing.value = null
     showToast({ tone: 'success', title: '帳戶已更新', message: `「${input.name}」的變更已保存。` })
   } catch (error) {
@@ -318,7 +321,7 @@ async function dropItemOnItem(target, event) {
             <div class="field"><label for="edit-group">所屬群組</label><UiSelect id="edit-group" v-model="editing.groupId" :options="groupOptions" :disabled="editing.system" /></div>
             <div class="field"><label for="edit-name">名稱</label><input id="edit-name" v-model="editing.name" class="input" required /></div>
             <div class="field"><label for="edit-behavior">帳戶類型</label><div v-if="editing.system" class="locked-field">系統現金（固定）</div><UiSelect v-else id="edit-behavior" v-model="editing.behavior" :options="editBehaviorOptions" /></div>
-            <div class="field"><label for="edit-amount">目前金額{{ editing.behavior === 'foreign' ? `（${editing.currency}）` : '' }}</label><FormattedNumberInput id="edit-amount" v-model="editing.amount" class="input input--amount" :min="0" :max-fraction-digits="2" /></div>
+            <div class="field"><label for="edit-amount">目前金額{{ editing.behavior === 'foreign' ? `（${editing.currency}）` : '' }}</label><FormattedNumberInput id="edit-amount" v-model="editing.amount" class="input input--amount" :min="0" :max-fraction-digits="2" :disabled="editing.system && cashReconciliationEnabled" /><span v-if="editing.system && cashReconciliationEnabled" class="field-help">金額由現金驗算頁更新。</span></div>
             <div class="field full"><label for="edit-liquidity">流動性</label><UiSelect id="edit-liquidity" v-model="editing.liquidity" :options="liquidityOptions" :disabled="editing.system || editing.behavior === 'liability'" /><span class="field-help">{{ liquidityHelp(editing.liquidity) }}</span></div>
             <template v-if="editing.behavior === 'foreign'">
               <div class="field"><label for="edit-currency">幣別</label><UiSelect id="edit-currency" v-model="editing.currency" :options="currencyOptions" /></div>
@@ -328,7 +331,7 @@ async function dropItemOnItem(target, event) {
               </div>
             </template>
             <AppNotice v-if="fx.error && editing.behavior === 'foreign'" class="full" tone="warning" title="匯率更新未完成">{{ fx.error }}</AppNotice>
-            <AppNotice v-if="editing.system" class="full" title="系統連動帳戶">這個帳戶固定提供給現金驗算；可以調整名稱與金額，但不能移動、改變類型或刪除。</AppNotice>
+            <AppNotice v-if="editing.system" class="full" title="系統連動帳戶">{{ cashReconciliationEnabled ? '這個帳戶的金額由現金驗算頁更新；這裡仍可調整名稱，但不能移動、改變類型或刪除。' : '目前使用帳戶直接管理模式；可以在這裡調整名稱與金額，但不能移動、改變類型或刪除。' }}</AppNotice>
             <div class="form-actions full"><button class="btn btn-primary" :disabled="store.saving">儲存項目變更</button></div>
           </form>
         </UiPanel>
@@ -347,7 +350,7 @@ async function dropItemOnItem(target, event) {
               <div class="group-header__copy">
                 <template v-if="group.system"><div class="system-group-name"><Lock :size="16" />{{ group.name }}</div></template>
                 <template v-else><label class="sr-only" :for="'group-' + group.id">群組名稱</label><input :id="'group-' + group.id" class="group-name" :value="group.name" @change="renameGroup(group, $event)" /></template>
-                <span>{{ itemsFor(group.id).length }} 個使用中項目<template v-if="group.system"> · 現金驗算固定群組</template></span>
+                <span>{{ itemsFor(group.id).length }} 個使用中項目<template v-if="group.system"> · {{ cashReconciliationEnabled ? '現金驗算連動' : '帳戶直接管理' }}</template></span>
               </div>
               <div class="data-row__actions">
                 <button class="btn btn-ghost btn-icon" type="button" title="上移群組" @click="moveGroup(group, -1)"><ArrowUp :size="17" /></button>

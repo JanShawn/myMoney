@@ -1,5 +1,5 @@
 <script setup>
-import { AlertCircle, CheckCircle2, ChevronDown, Database, Download, FileJson, FileSpreadsheet, History, RotateCcw, Save, Trash2, Upload } from '@lucide/vue'
+import { AlertCircle, CheckCircle2, ChevronDown, Database, Download, FileJson, FileSpreadsheet, History, RotateCcw, Save, Trash2, Upload, WalletMinimal } from '@lucide/vue'
 import { useMoneyStore } from '~/stores/money'
 
 const store = useMoneyStore()
@@ -11,6 +11,7 @@ const pendingRestoreAt = ref('')
 const pendingReset = ref(false)
 const pendingImport = shallowRef(null)
 
+const cashReconciliationEnabled = computed(() => store.config?.settings?.cashReconciliationEnabled !== false)
 const jsonBackup = computed(() => store.storageStatus.jsonBackup)
 const pendingChanges = computed(() => jsonBackup.value.changes || [])
 const backupTotalBytes = computed(() => backups.value.reduce((total, backup) => total + Number(backup.sizeBytes || 0), 0))
@@ -93,6 +94,23 @@ async function exportExcel() {
   } catch { /* 詳細原因由全站錯誤提示呈現。 */ }
 }
 
+async function toggleCashReconciliation() {
+  const enabled = !cashReconciliationEnabled.value
+  try {
+    await store.updateSettings({ cashReconciliationEnabled: enabled })
+    showToast({
+      tone: 'success',
+      title: enabled ? '現金驗算已啟用' : '已切換為帳戶直接管理',
+      message: enabled
+        ? '「身上現金」的金額改由現金驗算頁管理。'
+        : '現金驗算資料仍會保留，可直接在帳戶結構修改現金金額。'
+    })
+  } catch (error) {
+    store.error = ''
+    showToast({ tone: 'error', title: '偏好設定保存失敗', message: error?.message || '無法寫入資料。' })
+  }
+}
+
 onMounted(() => {
   currentOrigin.value = window.location.origin
   loadBackups()
@@ -111,7 +129,21 @@ function formatBytes(bytes) {
 
 <template>
   <div>
-    <PageHeader eyebrow="Local-first storage" title="設定" description="平常操作會自動保存在瀏覽器；需要留存或搬移資料時，再建立一份 JSON 備份。" />
+    <PageHeader eyebrow="Preferences & storage" title="設定" description="選擇適合自己的管理方式；平常操作會自動保存在瀏覽器，需要搬移時再建立 JSON 備份。" />
+    <UiPanel class="feature-panel" title="功能偏好" description="每位使用者都能選擇是否需要現金明細驗算。">
+      <template #action><span class="pill" :class="{ 'pill-neutral': !cashReconciliationEnabled }">{{ cashReconciliationEnabled ? '已啟用現金驗算' : '帳戶直接管理' }}</span></template>
+      <div class="feature-setting">
+        <div class="feature-setting__icon"><WalletMinimal :size="21" aria-hidden="true" /></div>
+        <div class="feature-setting__copy">
+          <strong>現金驗算</strong>
+          <span v-if="cashReconciliationEnabled">「身上現金」金額由現金驗算頁管理，帳戶結構只負責名稱與分類。</span>
+          <span v-else>隱藏現金驗算入口，直接在帳戶結構修改「身上現金」金額。</span>
+          <small>關閉不會刪除既有驗算明細；之後重新啟用即可繼續使用。</small>
+        </div>
+        <button class="feature-switch" type="button" role="switch" :aria-checked="cashReconciliationEnabled" :aria-label="cashReconciliationEnabled ? '關閉現金驗算' : '啟用現金驗算'" :disabled="store.saving" @click="toggleCashReconciliation"><span /></button>
+      </div>
+    </UiPanel>
+
     <UiPanel class="storage-panel" title="保存狀態" description="JSON 不再與瀏覽器長期連結，也不會因檔案權限失效而影響平常保存。">
       <template #action>
         <span class="pill" :class="{ 'pill-blue': backupPresentation.tone === 'current', 'pill-warning': backupPresentation.tone === 'pending' }">{{ backupPresentation.badge }}</span>
@@ -209,6 +241,17 @@ function formatBytes(bytes) {
 
 <style scoped>
 .settings-section { margin-top: 18px; }
+.feature-panel { margin-bottom: 18px; }
+.feature-setting { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-muted); }
+.feature-setting__icon { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 12px; background: var(--surface); color: var(--primary); box-shadow: 0 3px 10px rgba(19, 72, 66, .06); }
+.feature-setting__copy { display: grid; gap: 3px; min-width: 0; }
+.feature-setting__copy strong { font-size: .88rem; }
+.feature-setting__copy span, .feature-setting__copy small { color: var(--muted); font-size: .77rem; line-height: 1.5; }
+.feature-switch { position: relative; width: 48px; height: 28px; padding: 3px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--neutral-soft); cursor: pointer; transition: background-color .18s ease, border-color .18s ease; }
+.feature-switch span { display: block; width: 20px; height: 20px; border-radius: 50%; background: var(--surface); box-shadow: 0 2px 6px rgba(15, 50, 47, .2); transition: transform .18s ease; }
+.feature-switch[aria-checked="true"] { border-color: var(--primary); background: var(--primary); }
+.feature-switch[aria-checked="true"] span { transform: translateX(18px); }
+.feature-switch:disabled { cursor: not-allowed; opacity: .55; }
 .danger-zone { border-color: var(--danger-border); }
 .danger-zone :deep(.panel__action) { color: var(--danger); }
 .danger-zone__description { margin: 0 0 12px; color: var(--muted); font-size: .78rem; line-height: 1.55; }
@@ -257,6 +300,10 @@ function formatBytes(bytes) {
 .backup-confirm { grid-column: 1 / -1; }
 .confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 @media (max-width: 620px) {
+  .feature-panel :deep(.panel__header) { flex-direction: column; }
+  .feature-panel :deep(.panel__action) { width: 100%; justify-content: flex-start; }
+  .feature-setting { grid-template-columns: 42px minmax(0, 1fr); align-items: start; }
+  .feature-switch { grid-column: 1 / -1; justify-self: end; margin-top: -4px; }
   .storage-panel :deep(.panel__action) { width: 100%; justify-content: flex-start; }
   .backup-actions, .backup-item { grid-template-columns: 1fr; }
   .backup-actions .btn { width: 100%; }

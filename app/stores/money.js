@@ -294,6 +294,25 @@ export const useMoneyStore = defineStore('money', () => {
     return item
   })
 
+  const moveRecurringCashflowItem = (id, targetId, placement = 'after') => mutate((draft) => {
+    const items = draft.recurringCashflowItems || []
+    const item = items.find((entry) => entry.id === id)
+    const target = items.find((entry) => entry.id === targetId)
+    if (!item || !target) throw new Error('找不到要排序的週期收支項目。')
+    if (item.type !== target.type) throw new Error('固定收入與固定支出必須分開排序。')
+    if (item.id === target.id) return item
+
+    const ordered = items
+      .filter((entry) => entry.type === item.type)
+      .sort((left, right) => Number(left.order || 0) - Number(right.order || 0))
+    const sourceIndex = ordered.findIndex((entry) => entry.id === item.id)
+    const [movedItem] = ordered.splice(sourceIndex, 1)
+    const targetIndex = ordered.findIndex((entry) => entry.id === target.id)
+    ordered.splice(targetIndex + (placement === 'before' ? 0 : 1), 0, movedItem)
+    ordered.forEach((entry, index) => { entry.order = index })
+    return movedItem
+  })
+
   const deleteGroup = (id) => mutate((draft) => {
     if (id === SYSTEM_CASH_GROUP_ID) throw new Error('「現金」是現金驗算使用的系統群組，不能刪除。')
     const index = draft.groups.findIndex((entry) => entry.id === id)
@@ -410,7 +429,7 @@ export const useMoneyStore = defineStore('money', () => {
     config, summary, cashflowPlan, snapshots, loading, saving, error, storageStatus,
     activeItems, activeHoldings, recurringCashflowItems, lastSnapshot,
     load, addGroup, updateGroup, deleteGroup, addItem, updateItem, deleteItem, moveItem, addHolding, updateHolding, deleteHolding, moveHolding,
-    updateSettings, updateCashDraft, addRecurringCashflowItem, updateRecurringCashflowItem, deleteRecurringCashflowItem, swapRecurringCashflowItems,
+    updateSettings, updateCashDraft, addRecurringCashflowItem, updateRecurringCashflowItem, deleteRecurringCashflowItem, swapRecurringCashflowItems, moveRecurringCashflowItem,
     lookupHolding, marketPreview, refreshExchangeRates, saveSnapshot, deleteSnapshot,
     saveJson, previewJsonImport, importJson,
     getBackups, restoreBackup, resetAllData,

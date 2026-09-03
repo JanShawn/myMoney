@@ -1,5 +1,5 @@
 <script setup>
-import { ArrowDownRight, ArrowUpDown, ArrowUpRight, CalendarRange, ChevronDown, ChevronUp, Pencil, Plus, Trash2, WalletCards } from '@lucide/vue'
+import { ArrowDownRight, ArrowUpDown, ArrowUpRight, CalendarRange, ChevronDown, GripVertical, Pencil, Plus, Trash2, WalletCards } from '@lucide/vue'
 import { recurringCashflowAnnualAmount, recurringCashflowMonthlyAmount, recurringCashflowOccurrenceMonths } from '~/services/money-domain'
 import { useMoneyStore } from '~/stores/money'
 
@@ -11,9 +11,12 @@ const formResetKey = ref(0)
 const formPanel = ref(null)
 const editingId = ref('')
 const pendingDeleteId = ref('')
-const sortKey = ref('occurrenceMonth')
+const sortKey = ref('custom')
 const sortDirection = ref('asc')
 const collapsedGroups = reactive({ income: false, expense: false })
+const draggingItemId = ref('')
+const dragOverItemId = ref('')
+const dragOverPlacement = ref('after')
 
 const frequencyOptions = [
   { value: 'monthly', label: '每月' },
@@ -24,6 +27,7 @@ const frequencyOptions = [
 const frequencyLabels = Object.fromEntries(frequencyOptions.map((option) => [option.value, option.label]))
 const monthOptions = Array.from({ length: 12 }, (_, index) => ({ value: index + 1, label: `${index + 1} 月` }))
 const sortOptions = [
+  { value: 'custom', label: '自訂排序' },
   { value: 'occurrenceMonth', label: '發生月份' },
   { value: 'amount', label: '單次金額' },
   { value: 'monthlyAmount', label: '月均金額' },
@@ -43,6 +47,9 @@ function occurrenceSortMonth(item) {
 }
 
 function sortItems(items) {
+  if (sortKey.value === 'custom') {
+    return [...items].sort((left, right) => Number(left.order || 0) - Number(right.order || 0))
+  }
   const direction = sortDirection.value === 'asc' ? 1 : -1
   return [...items].sort((left, right) => {
     const value = (item) => {
@@ -128,18 +135,51 @@ async function confirmDelete() {
   }
 }
 
-function moveTarget(items, index, direction) {
-  const target = items[index + direction]
-  if (!target) return null
-  if (occurrenceSortMonth(target) !== occurrenceSortMonth(items[index])) return null
-  return target
+function startItemDrag(item, event) {
+  if (sortKey.value !== 'custom' || store.saving) {
+    event.preventDefault()
+    return
+  }
+  draggingItemId.value = item.id
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData('text/plain', item.id)
 }
 
-async function moveItem(item, direction, items, index) {
-  const target = moveTarget(items, index, direction)
-  if (!target) return
+function finishItemDrag() {
+  draggingItemId.value = ''
+  dragOverItemId.value = ''
+  dragOverPlacement.value = 'after'
+}
+
+function dragItemOver(target, event) {
+  const item = store.recurringCashflowItems.find((entry) => entry.id === draggingItemId.value)
+  if (!item || item.id === target.id || item.type !== target.type || sortKey.value !== 'custom') return
+  event.preventDefault()
+  event.dataTransfer.dropEffect = 'move'
+  const bounds = event.currentTarget.getBoundingClientRect()
+  dragOverItemId.value = target.id
+  dragOverPlacement.value = event.clientY < bounds.top + bounds.height / 2 ? 'before' : 'after'
+}
+
+async function dropItem(target, event) {
+  event.preventDefault()
+  const itemId = draggingItemId.value || event.dataTransfer.getData('text/plain')
+  const placement = dragOverPlacement.value
+  finishItemDrag()
+  if (!itemId || itemId === target.id) return
   try {
-    await store.swapRecurringCashflowItems(item.id, target.id)
+    await store.moveRecurringCashflowItem(itemId, target.id, placement)
+  } catch (error) {
+    store.error = ''
+    showToast({ tone: 'error', title: '排序保存失敗', message: error?.message || '無法寫入資料。' })
+  }
+}
+
+async function moveItemWithKeyboard(item, direction, items, index) {
+  const target = items[index + direction]
+  if (!target || store.saving) return
+  try {
+    await store.moveRecurringCashflowItem(item.id, target.id, direction < 0 ? 'before' : 'after')
   } catch (error) {
     store.error = ''
     showToast({ tone: 'error', title: '排序保存失敗', message: error?.message || '無法寫入資料。' })
@@ -147,7 +187,8 @@ async function moveItem(item, direction, items, index) {
 }
 
 watch(sortKey, (value) => {
-  sortDirection.value = value === 'occurrenceMonth' ? 'asc' : 'desc'
+  finishItemDrag()
+  sortDirection.value = ['custom', 'occurrenceMonth'].includes(value) ? 'asc' : 'desc'
 })
 </script>
 
@@ -226,11 +267,11 @@ watch(sortKey, (value) => {
         </UiPanel>
       </div>
 
-      <UiPanel title="週期收支項目" :description="sortKey === 'occurrenceMonth' ? `收入 ${incomeItems.length} 筆 · 支出 ${expenseItems.length} 筆；同月份項目可用 ↑ ↓ 自訂先後。` : `收入 ${incomeItems.length} 筆 · 支出 ${expenseItems.length} 筆；金額皆已換算為台幣月均與年總額。`" flush>
+      <UiPanel title="週期收支項目" :description="sortKey === 'custom' ? `收入 ${incomeItems.length} 筆 · 支出 ${expenseItems.length} 筆；拖曳左側把手即可調整同類項目的順序。` : `收入 ${incomeItems.length} 筆 · 支出 ${expenseItems.length} 筆；目前依指定欄位排序。`" flush>
         <template #action>
           <div class="cashflow-sort">
             <UiSelect id="cashflow-sort" v-model="sortKey" :options="sortOptions" aria-label="週期收支排序欄位" />
-            <button class="btn btn-secondary cashflow-sort__direction" type="button" :title="`目前${sortDirectionLabel}，點擊切換順序`" @click="sortDirection = sortDirection === 'asc' ? 'desc' : 'asc'">
+            <button v-if="sortKey !== 'custom'" class="btn btn-secondary cashflow-sort__direction" type="button" :title="`目前${sortDirectionLabel}，點擊切換順序`" @click="sortDirection = sortDirection === 'asc' ? 'desc' : 'asc'">
               <ArrowUpDown :size="16" aria-hidden="true" />{{ sortDirectionLabel }}
             </button>
           </div>
@@ -244,13 +285,24 @@ watch(sortKey, (value) => {
               </button>
             </header>
             <div v-if="incomeItems.length && !collapsedGroups.income" id="income-items-content" class="cashflow-list">
-              <article v-for="(item, index) in incomeItems" :key="item.id" class="cashflow-row">
+              <article
+                v-for="(item, index) in incomeItems"
+                :key="item.id"
+                class="cashflow-row"
+                :class="{
+                  'cashflow-row--sortable': sortKey === 'custom',
+                  'cashflow-row--dragging': draggingItemId === item.id,
+                  'cashflow-row--drop-before': dragOverItemId === item.id && dragOverPlacement === 'before',
+                  'cashflow-row--drop-after': dragOverItemId === item.id && dragOverPlacement === 'after'
+                }"
+                @dragover="dragItemOver(item, $event)"
+                @drop="dropItem(item, $event)"
+              >
+                <button v-if="sortKey === 'custom'" class="cashflow-row__drag-handle" type="button" draggable="true" :aria-label="`拖曳調整 ${item.name} 的順序；也可用上下方向鍵移動`" title="拖曳調整順序" @dragstart="startItemDrag(item, $event)" @dragend="finishItemDrag" @keydown.up.prevent="moveItemWithKeyboard(item, -1, incomeItems, index)" @keydown.down.prevent="moveItemWithKeyboard(item, 1, incomeItems, index)"><GripVertical :size="18" aria-hidden="true" /></button>
                 <div class="cashflow-row__main"><strong>{{ item.name }}</strong><span>{{ frequencyLabels[item.frequency] }} {{ money(item.amount) }} · {{ occurrenceLabel(item) }}</span></div>
                 <div class="cashflow-row__amount"><small>月均</small><strong>{{ money(recurringCashflowMonthlyAmount(item)) }}</strong></div>
                 <div class="cashflow-row__amount"><small>年總額</small><strong>{{ money(recurringCashflowAnnualAmount(item)) }}</strong></div>
                 <div class="cashflow-row__actions">
-                  <button v-if="sortKey === 'occurrenceMonth'" class="btn btn-ghost btn-icon" type="button" :disabled="!moveTarget(incomeItems, index, -1) || store.saving" :aria-label="`將 ${item.name} 在同月份項目中上移`" @click="moveItem(item, -1, incomeItems, index)"><ChevronUp :size="17" aria-hidden="true" /></button>
-                  <button v-if="sortKey === 'occurrenceMonth'" class="btn btn-ghost btn-icon" type="button" :disabled="!moveTarget(incomeItems, index, 1) || store.saving" :aria-label="`將 ${item.name} 在同月份項目中下移`" @click="moveItem(item, 1, incomeItems, index)"><ChevronDown :size="17" aria-hidden="true" /></button>
                   <button class="btn btn-ghost btn-icon" type="button" :aria-label="`編輯 ${item.name}`" @click="startEdit(item)"><Pencil :size="17" aria-hidden="true" /></button>
                   <button class="btn btn-ghost btn-icon" type="button" :aria-label="`刪除 ${item.name}`" @click="pendingDeleteId = item.id"><Trash2 :size="17" aria-hidden="true" /></button>
                 </div>
@@ -267,13 +319,24 @@ watch(sortKey, (value) => {
               </button>
             </header>
             <div v-if="expenseItems.length && !collapsedGroups.expense" id="expense-items-content" class="cashflow-list">
-              <article v-for="(item, index) in expenseItems" :key="item.id" class="cashflow-row">
+              <article
+                v-for="(item, index) in expenseItems"
+                :key="item.id"
+                class="cashflow-row"
+                :class="{
+                  'cashflow-row--sortable': sortKey === 'custom',
+                  'cashflow-row--dragging': draggingItemId === item.id,
+                  'cashflow-row--drop-before': dragOverItemId === item.id && dragOverPlacement === 'before',
+                  'cashflow-row--drop-after': dragOverItemId === item.id && dragOverPlacement === 'after'
+                }"
+                @dragover="dragItemOver(item, $event)"
+                @drop="dropItem(item, $event)"
+              >
+                <button v-if="sortKey === 'custom'" class="cashflow-row__drag-handle" type="button" draggable="true" :aria-label="`拖曳調整 ${item.name} 的順序；也可用上下方向鍵移動`" title="拖曳調整順序" @dragstart="startItemDrag(item, $event)" @dragend="finishItemDrag" @keydown.up.prevent="moveItemWithKeyboard(item, -1, expenseItems, index)" @keydown.down.prevent="moveItemWithKeyboard(item, 1, expenseItems, index)"><GripVertical :size="18" aria-hidden="true" /></button>
                 <div class="cashflow-row__main"><strong>{{ item.name }}</strong><span>{{ frequencyLabels[item.frequency] }} {{ money(item.amount) }} · {{ occurrenceLabel(item) }}</span></div>
                 <div class="cashflow-row__amount"><small>月均</small><strong>{{ money(recurringCashflowMonthlyAmount(item)) }}</strong></div>
                 <div class="cashflow-row__amount"><small>年總額</small><strong>{{ money(recurringCashflowAnnualAmount(item)) }}</strong></div>
                 <div class="cashflow-row__actions">
-                  <button v-if="sortKey === 'occurrenceMonth'" class="btn btn-ghost btn-icon" type="button" :disabled="!moveTarget(expenseItems, index, -1) || store.saving" :aria-label="`將 ${item.name} 在同月份項目中上移`" @click="moveItem(item, -1, expenseItems, index)"><ChevronUp :size="17" aria-hidden="true" /></button>
-                  <button v-if="sortKey === 'occurrenceMonth'" class="btn btn-ghost btn-icon" type="button" :disabled="!moveTarget(expenseItems, index, 1) || store.saving" :aria-label="`將 ${item.name} 在同月份項目中下移`" @click="moveItem(item, 1, expenseItems, index)"><ChevronDown :size="17" aria-hidden="true" /></button>
                   <button class="btn btn-ghost btn-icon" type="button" :aria-label="`編輯 ${item.name}`" @click="startEdit(item)"><Pencil :size="17" aria-hidden="true" /></button>
                   <button class="btn btn-ghost btn-icon" type="button" :aria-label="`刪除 ${item.name}`" @click="pendingDeleteId = item.id"><Trash2 :size="17" aria-hidden="true" /></button>
                 </div>
@@ -328,7 +391,15 @@ watch(sortKey, (value) => {
 .cashflow-group__icon { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 9px; }
 .cashflow-group__icon--income, .cashflow-group__icon--expense { border: 1px solid var(--border); background: var(--surface); color: var(--text-soft); }
 .cashflow-list { display: grid; }
-.cashflow-row { display: grid; grid-template-columns: minmax(130px, 1.35fr) minmax(96px, .72fr) minmax(105px, .78fr) auto; align-items: center; gap: 12px; min-height: 72px; padding: 12px 20px 12px 24px; border-top: 1px solid var(--border); }
+.cashflow-row { position: relative; display: grid; grid-template-columns: minmax(130px, 1.35fr) minmax(96px, .72fr) minmax(105px, .78fr) auto; align-items: center; gap: 12px; min-height: 72px; padding: 12px 20px 12px 24px; border-top: 1px solid var(--border); transition: background-color .16s ease, opacity .16s ease; }
+.cashflow-row--sortable { grid-template-columns: 28px minmax(130px, 1.35fr) minmax(96px, .72fr) minmax(105px, .78fr) auto; padding-left: 16px; }
+.cashflow-row--dragging { opacity: .45; background: var(--surface-muted); }
+.cashflow-row--drop-before::before, .cashflow-row--drop-after::after { content: ""; position: absolute; z-index: 2; right: 12px; left: 12px; height: 3px; border-radius: 999px; background: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
+.cashflow-row--drop-before::before { top: -2px; }
+.cashflow-row--drop-after::after { bottom: -2px; }
+.cashflow-row__drag-handle { width: 28px; height: 36px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--muted); cursor: grab; touch-action: none; }
+.cashflow-row__drag-handle:hover, .cashflow-row__drag-handle:focus-visible { background: var(--primary-soft); color: var(--primary); }
+.cashflow-row__drag-handle:active { cursor: grabbing; }
 .cashflow-row__main { min-width: 0; }
 .cashflow-row__main strong, .cashflow-row__main span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cashflow-row__main strong { font-size: .86rem; }
@@ -349,6 +420,7 @@ watch(sortKey, (value) => {
 @media (max-width: 620px) {
   .cashflow-metrics :deep(.metric-card), .cashflow-metrics :deep(.metric-card:first-child) { grid-column: span 12; }
   .cashflow-row { grid-template-columns: minmax(0, 1fr) auto; padding-inline: 18px; }
+  .cashflow-row--sortable { grid-template-columns: 28px minmax(0, 1fr) auto; padding-left: 12px; }
   .cashflow-row__amount { display: none; }
   .cashflow-row__main span { white-space: normal; }
   .cashflow-group__header > button { padding-inline: 18px; }

@@ -1,5 +1,5 @@
 <script setup>
-import { Banknote, Clock3, Eye, EyeOff, Landmark, Trash2, TrendingUp, Wallet } from '@lucide/vue'
+import { Banknote, ChevronLeft, ChevronRight, Clock3, Eye, EyeOff, Landmark, Trash2, TrendingUp, Wallet } from '@lucide/vue'
 import { useMoneyStore } from '~/stores/money'
 
 const store = useMoneyStore()
@@ -13,6 +13,7 @@ const number = (value) => new Intl.NumberFormat('zh-TW', { maximumFractionDigits
 const dateTime = (value) => value ? new Intl.DateTimeFormat('zh-TW', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '尚未完成驗算'
 const pendingDeleteDate = ref('')
 const hideAmounts = ref(false)
+const selectedRecordYear = ref('')
 const displayMoney = (value) => hideAmounts.value ? 'NT$ ******' : money(value)
 
 const chartSnapshots = computed(() => {
@@ -39,8 +40,29 @@ const allocationRows = computed(() => [
 })))
 const stockAllocation = computed(() => allocationRows.value.find((row) => row.key === 'stocks'))
 const bondAllocation = computed(() => allocationRows.value.find((row) => row.key === 'bonds'))
-const recentMarketRecords = computed(() => [...chartSnapshots.value].slice(-6).reverse())
+const recordYears = computed(() => [...new Set(store.snapshots
+  .map((record) => String(record.date || '').slice(0, 4))
+  .filter((year) => /^\d{4}$/.test(year)))].sort((left, right) => right.localeCompare(left)))
+const selectedRecordYearIndex = computed(() => recordYears.value.indexOf(selectedRecordYear.value))
+const selectedYearRecords = computed(() => store.snapshots
+  .filter((record) => String(record.date || '').startsWith(`${selectedRecordYear.value}-`))
+  .slice()
+  .reverse())
 const pendingDeleteRecord = computed(() => store.snapshots.find((record) => record.date === pendingDeleteDate.value) || null)
+
+watch(recordYears, (years) => {
+  if (!years.includes(selectedRecordYear.value)) selectedRecordYear.value = years[0] || ''
+}, { immediate: true })
+
+function moveRecordYear(direction) {
+  const target = recordYears.value[selectedRecordYearIndex.value + direction]
+  if (target) selectedRecordYear.value = target
+}
+
+function compactDate(value) {
+  return String(value || '').slice(5).replace('-', '/')
+}
+
 async function confirmDeleteSnapshot() {
   if (!pendingDeleteRecord.value) return
   const snapshotDate = pendingDeleteRecord.value.date
@@ -156,11 +178,24 @@ const marketData = computed(() => ({
         </UiPanel>
       </section>
 
-      <UiPanel class="space-before" title="最近盤點與大盤紀錄" description="直接查看每次記錄淨資產時，當下保存的加權指數與 240MA。">
+      <UiPanel
+        class="space-before market-history-panel"
+        title="盤點與大盤紀錄"
+        :description="selectedRecordYear ? `${selectedRecordYear} 年共 ${selectedYearRecords.length} 筆；一次只顯示一個年度，避免紀錄持續往下延伸。` : '完成盤點後，這裡會依年份整理淨資產與大盤數字。'"
+        compact
+      >
+        <template v-if="recordYears.length" #action>
+          <div class="year-pager" aria-label="切換盤點紀錄年份">
+            <button class="year-pager__button" type="button" :disabled="selectedRecordYearIndex >= recordYears.length - 1" aria-label="查看上一個年度" @click="moveRecordYear(1)"><ChevronLeft :size="17" aria-hidden="true" /></button>
+            <strong aria-live="polite">{{ selectedRecordYear }} 年</strong>
+            <span>{{ selectedRecordYearIndex + 1 }} / {{ recordYears.length }}</span>
+            <button class="year-pager__button" type="button" :disabled="selectedRecordYearIndex <= 0" aria-label="查看下一個年度" @click="moveRecordYear(-1)"><ChevronRight :size="17" aria-hidden="true" /></button>
+          </div>
+        </template>
         <div v-if="hasSnapshotData" class="market-records">
-          <div class="market-record market-record--header"><span>盤點日期</span><span>淨資產</span><span>加權指數</span><span>240MA</span><span class="market-record__action-label">操作</span></div>
-          <div v-for="record in recentMarketRecords" :key="record.date" class="market-record">
-            <strong>{{ record.date }}</strong><span>{{ displayMoney(record.netWorth) }}</span><span>{{ number(record.taiex) }}</span><span>{{ number(record.ma240) }}</span>
+          <div class="market-record market-record--header"><span>日期</span><span>淨資產</span><span>加權指數</span><span>240MA</span><span class="market-record__action-label">操作</span></div>
+          <div v-for="record in selectedYearRecords" :key="record.date" class="market-record">
+            <strong :title="record.date">{{ compactDate(record.date) }}</strong><span>{{ displayMoney(record.netWorth) }}</span><span>{{ number(record.taiex) }}</span><span>{{ number(record.ma240) }}</span>
             <button class="btn btn-ghost btn-icon market-record__delete" type="button" :aria-label="`刪除 ${record.date} 的盤點紀錄`" @click="pendingDeleteDate = record.date"><Trash2 :size="16" aria-hidden="true" /></button>
           </div>
         </div>
@@ -211,7 +246,13 @@ const marketData = computed(() => ({
 .support-allocation-row > div { display: grid; gap: 3px; min-width: 0; }
 .support-allocation-row strong { color: var(--text); font-size: .85rem; }
 .market-records { overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-md); }
-.market-record { display: grid; grid-template-columns: 1fr repeat(3, minmax(120px, .8fr)) 42px; align-items: center; gap: 16px; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: .78rem; }
+.year-pager { display: grid; grid-template-columns: 34px auto auto 34px; align-items: center; gap: 7px; min-height: 36px; padding: 2px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-muted); }
+.year-pager strong { color: var(--text); font-size: .8rem; white-space: nowrap; }
+.year-pager > span { color: var(--muted); font-size: .72rem; white-space: nowrap; }
+.year-pager__button { width: 34px; height: 32px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--text-soft); cursor: pointer; transition: background-color .18s ease, color .18s ease; }
+.year-pager__button:hover:not(:disabled) { background: var(--surface); color: var(--primary); }
+.year-pager__button:disabled { color: var(--muted); cursor: not-allowed; opacity: .42; }
+.market-record { display: grid; grid-template-columns: minmax(70px, .65fr) repeat(3, minmax(120px, .8fr)) 38px; align-items: center; gap: 14px; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: .77rem; }
 .market-record:last-child { border-bottom: 0; }
 .market-record > :not(:first-child, .market-record__delete) { text-align: right; font-variant-numeric: tabular-nums; }
 .market-record--header { background: var(--surface-muted); color: var(--muted); font-weight: 720; }
@@ -242,6 +283,8 @@ const marketData = computed(() => ({
   .support-allocation-row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; }
   .support-allocation-row h3 { grid-column: 1 / -1; }
   .market-records { overflow-x: auto; }
-  .market-record { min-width: 680px; }
+  .market-record { min-width: 620px; }
+  .market-history-panel :deep(.panel__header) { flex-direction: column; }
+  .market-history-panel :deep(.panel__action) { width: 100%; justify-content: flex-start; }
 }
 </style>

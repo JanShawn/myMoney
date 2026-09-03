@@ -37,6 +37,7 @@ export function createDefaultConfig() {
     settings: {
       baseCurrency: 'TWD',
       snapshotDisplayLimit: 30,
+      cashReconciliationEnabled: true,
       lastSavedAt: null
     },
     groups: [

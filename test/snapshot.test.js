@@ -17,6 +17,7 @@ describe('snapshot storage', () => {
     expect(config.snapshots).toEqual([])
     expect(config.cashDrafts).toEqual({})
     expect(config.settings.snapshotDisplayLimit).toBe(30)
+    expect(config.settings.cashReconciliationEnabled).toBe(true)
     expect(config.groups).toContainEqual(expect.objectContaining({ id: 'group-cash', name: '現金', system: true, archived: false }))
     expect(config.items).toContainEqual(expect.objectContaining({ id: 'item-cash', groupId: 'group-cash', behavior: 'cash', system: true, archived: false }))
   })

@@ -8,6 +8,7 @@ const { showToast } = useToast()
 const expectedAmount = ref(0)
 const createRow = (operation = 'add', amount = '') => ({ id: crypto.randomUUID(), label: '', operation, amount })
 const rows = ref([createRow()])
+const cashReconciliationEnabled = computed(() => store.config?.settings?.cashReconciliationEnabled !== false)
 const selected = computed(() => store.activeItems.find((item) => item.id === SYSTEM_CASH_ITEM_ID))
 const selectedId = computed(() => selected.value?.id || '')
 const lastReconciledText = computed(() => selected.value?.lastReconciledAt
@@ -161,8 +162,13 @@ const money = (value) => new Intl.NumberFormat('zh-TW', { style: 'currency', cur
 
 <template>
   <div>
-    <PageHeader eyebrow="Cash reconciliation" title="現金驗算" description="直接維護目前現金總額；需要核對時再新增實際明細，系統會自動驗算差額。" />
-    <div class="page-grid page-grid--sidebar">
+    <PageHeader eyebrow="Cash reconciliation" title="現金驗算" :description="cashReconciliationEnabled ? '直接維護目前現金總額；需要核對時再新增實際明細，系統會自動驗算差額。' : '這項功能目前已關閉；現金金額改由帳戶結構直接管理。'" />
+    <UiPanel v-if="!cashReconciliationEnabled">
+      <EmptyState title="現金驗算尚未啟用" description="目前使用帳戶直接管理模式；既有驗算明細仍保留，重新啟用後可以繼續使用。">
+        <template #action><div class="inline-cluster"><NuxtLink to="/accounts" class="btn btn-primary">前往帳戶結構</NuxtLink><NuxtLink to="/settings" class="btn btn-secondary">調整功能偏好</NuxtLink></div></template>
+      </EmptyState>
+    </UiPanel>
+    <div v-else class="page-grid page-grid--sidebar">
       <UiPanel title="現金總額與驗算明細" description="明細為選用；未填明細時，系統會直接使用目前現金總額。">
         <template #action><button v-if="selected" class="btn btn-ghost" type="button" :disabled="store.saving" @click="clearDraft"><RotateCcw :size="16" />清除明細金額</button></template>
         <div v-if="selected" class="stack">

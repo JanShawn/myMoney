@@ -20,6 +20,7 @@ const links = [
   { to: '/cashflow', label: '收支規劃', mobileLabel: '收支', icon: CalendarRange },
   { to: '/settings', label: '設定', mobileLabel: '設定', icon: Settings }
 ]
+const visibleLinks = computed(() => links.filter((link) => link.to !== '/cash' || store.config?.settings?.cashReconciliationEnabled !== false))
 </script>
 
 <template>
@@ -30,7 +31,7 @@ const links = [
     </NuxtLink>
     <div class="nav-label">Workspace</div>
     <nav class="nav-list">
-      <NuxtLink v-for="link in links" :key="link.to" :to="link.to" class="nav-link">
+      <NuxtLink v-for="link in visibleLinks" :key="link.to" :to="link.to" class="nav-link">
         <span class="nav-link__icon"><component :is="link.icon" :size="18" aria-hidden="true" /></span>
         <span>{{ link.label }}</span>
       </NuxtLink>
@@ -47,8 +48,8 @@ const links = [
       </div>
     </div>
   </aside>
-  <nav class="bottom-nav" aria-label="行動版主要導覽">
-    <NuxtLink v-for="link in links" :key="link.to" :to="link.to" class="bottom-link">
+  <nav class="bottom-nav" aria-label="行動版主要導覽" :style="{ '--bottom-nav-items': visibleLinks.length + 1 }">
+    <NuxtLink v-for="link in visibleLinks" :key="link.to" :to="link.to" class="bottom-link">
       <component :is="link.icon" :size="19" aria-hidden="true" />
       <span>{{ link.mobileLabel }}</span>
     </NuxtLink>
@@ -89,7 +90,7 @@ const links = [
 .bottom-nav { display: none; }
 @media (max-width: 880px) {
   .sidebar { display: none; }
-  .bottom-nav { position: fixed; z-index: 30; inset: auto 0 0; display: grid; grid-template-columns: repeat(8, 1fr); padding: 5px max(5px, env(safe-area-inset-right)) calc(5px + env(safe-area-inset-bottom)) max(5px, env(safe-area-inset-left)); background: var(--surface-glass); border-top: 1px solid var(--border); box-shadow: var(--shadow-sm); backdrop-filter: blur(16px); }
+  .bottom-nav { position: fixed; z-index: 30; inset: auto 0 0; display: grid; grid-template-columns: repeat(var(--bottom-nav-items), minmax(0, 1fr)); padding: 5px max(5px, env(safe-area-inset-right)) calc(5px + env(safe-area-inset-bottom)) max(5px, env(safe-area-inset-left)); background: var(--surface-glass); border-top: 1px solid var(--border); box-shadow: var(--shadow-sm); backdrop-filter: blur(16px); }
   .bottom-link { min-width: 0; min-height: 51px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; padding: 0; border: 0; border-radius: 9px; background: transparent; color: var(--muted); font: inherit; font-size: .75rem; font-weight: 720; text-decoration: none; cursor: pointer; }
   .bottom-link.router-link-exact-active { color: var(--primary); background: var(--primary-soft); }
 }
