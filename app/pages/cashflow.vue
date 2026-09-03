@@ -76,10 +76,7 @@ const monthIncomeCount = computed(() => monthItems.value.filter((item) => item.t
 const monthExpenseCount = computed(() => monthItems.value.filter((item) => item.type === 'expense').length)
 const monthlyPlan = computed(() => calculateRecurringCashflowForMonth(store.recurringCashflowItems, selectedMonth.value))
 const selectedItems = computed(() => store.recurringCashflowItems.filter((item) => selectedItemIds.value.includes(item.id)))
-const selectedMonthlyPlan = computed(() => calculateRecurringCashflowForMonth(selectedItems.value, selectedMonth.value))
-const selectedAnnualPlan = computed(() => calculateRecurringCashflow(selectedItems.value))
-const monthNetAfterSelection = computed(() => monthlyPlan.value.netCashflow - selectedMonthlyPlan.value.netCashflow)
-const annualNetAfterSelection = computed(() => store.cashflowPlan.annualNetCashflow - selectedAnnualPlan.value.annualNetCashflow)
+const selectedPlan = computed(() => calculateRecurringCashflow(selectedItems.value))
 
 const money = (value) => new Intl.NumberFormat('zh-TW', {
   style: 'currency', currency: 'TWD', minimumFractionDigits: 0, maximumFractionDigits: 2
@@ -323,20 +320,16 @@ watch(() => store.recurringCashflowItems.map((item) => item.id), (itemIds) => {
         <template v-if="store.recurringCashflowItems.length">
           <section v-if="selectionMode" class="scenario-panel" aria-live="polite">
             <div class="scenario-panel__header">
-              <div><strong>選取項目試算</strong><span>只做排除比較，不會刪除或修改項目。</span></div>
+              <div><strong>選取項目試算</strong><span>以下以月均金額計算，不會刪除或修改項目。</span></div>
               <button v-if="selectedItemIds.length" class="btn btn-ghost" type="button" @click="selectedItemIds = []">清除選取</button>
             </div>
-            <p v-if="!selectedItemIds.length" class="scenario-panel__empty">從下方收入或支出勾選幾筆，即可看到 {{ selectedMonth }} 月與全年的影響。</p>
+            <p v-if="!selectedItemIds.length" class="scenario-panel__empty">從下方收入或支出勾選幾筆，即可看到這些項目的月均影響。</p>
             <template v-else>
               <div class="scenario-summary">
                 <div><small>已選項目</small><strong>{{ selectedItemIds.length }} 筆</strong></div>
-                <div><small>{{ selectedMonth }} 月選取收入</small><strong>{{ money(selectedMonthlyPlan.income) }}</strong></div>
-                <div><small>{{ selectedMonth }} 月選取支出</small><strong>{{ money(selectedMonthlyPlan.expense) }}</strong></div>
-                <div><small>{{ selectedMonth }} 月淨影響</small><strong>{{ signedMoney(selectedMonthlyPlan.netCashflow) }}</strong></div>
-              </div>
-              <div class="scenario-comparison">
-                <span><small>排除後 {{ selectedMonth }} 月淨現金流</small><strong>{{ money(monthlyPlan.netCashflow) }} <b aria-hidden="true">→</b> {{ money(monthNetAfterSelection) }}</strong></span>
-                <span><small>排除後年度淨現金流</small><strong>{{ money(store.cashflowPlan.annualNetCashflow) }} <b aria-hidden="true">→</b> {{ money(annualNetAfterSelection) }}</strong></span>
+                <div><small>月均選取收入</small><strong>{{ money(selectedPlan.monthlyIncome) }}</strong></div>
+                <div><small>月均選取支出</small><strong>{{ money(selectedPlan.monthlyExpense) }}</strong></div>
+                <div><small>月均淨影響</small><strong>{{ signedMoney(selectedPlan.monthlyNetCashflow) }}</strong></div>
               </div>
             </template>
           </section>
@@ -463,11 +456,8 @@ watch(() => store.recurringCashflowItems.map((item) => item.id), (itemIds) => {
 .scenario-panel__empty { margin: 0; padding: 12px; border: 1px dashed var(--border-strong); border-radius: 10px; background: var(--surface); text-align: center; }
 .scenario-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .scenario-summary > div { min-width: 0; display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
-.scenario-summary small, .scenario-comparison small { color: var(--muted); font-size: .72rem; }
-.scenario-summary strong, .scenario-comparison strong { overflow: hidden; color: var(--text); font-size: .82rem; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
-.scenario-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
-.scenario-comparison > span { min-width: 0; display: grid; gap: 4px; }
-.scenario-comparison b { padding-inline: 4px; color: var(--primary); font-weight: 800; }
+.scenario-summary small { color: var(--muted); font-size: .72rem; }
+.scenario-summary strong { overflow: hidden; color: var(--text); font-size: .82rem; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
 .cashflow-group + .cashflow-group { border-top: 1px solid var(--border); }
 .cashflow-group__header { background: var(--surface-muted); }
 .cashflow-group__header > button { width: 100%; min-height: 62px; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 24px; border: 0; background: transparent; color: inherit; cursor: pointer; text-align: left; }
@@ -518,7 +508,6 @@ watch(() => store.recurringCashflowItems.map((item) => item.id), (itemIds) => {
   .scenario-panel { padding-inline: 18px; }
   .scenario-panel__header { align-items: flex-start; }
   .scenario-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .scenario-comparison { grid-template-columns: 1fr; }
   .cashflow-row { grid-template-columns: minmax(0, 1fr) auto; padding-inline: 18px; }
   .cashflow-row--sortable, .cashflow-row--selecting { grid-template-columns: 28px minmax(0, 1fr) auto; padding-left: 12px; }
   .cashflow-row__amount { display: none; }
