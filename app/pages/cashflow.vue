@@ -77,7 +77,7 @@ const monthExpenseCount = computed(() => monthItems.value.filter((item) => item.
 const monthlyPlan = computed(() => calculateRecurringCashflowForMonth(store.recurringCashflowItems, selectedMonth.value))
 const selectedItems = computed(() => store.recurringCashflowItems.filter((item) => selectedItemIds.value.includes(item.id)))
 const selectedPlan = computed(() => calculateRecurringCashflow(selectedItems.value))
-const selectedMonthlyImpact = computed(() => selectedPlan.value.monthlyIncome + selectedPlan.value.monthlyExpense)
+const selectedMonthlyResult = computed(() => store.cashflowPlan.monthlyNetCashflow - selectedPlan.value.monthlyNetCashflow)
 
 const money = (value) => new Intl.NumberFormat('zh-TW', {
   style: 'currency', currency: 'TWD', minimumFractionDigits: 0, maximumFractionDigits: 2
@@ -330,8 +330,8 @@ watch(() => store.recurringCashflowItems.map((item) => item.id), (itemIds) => {
                 <div><small>已選項目</small><strong>{{ selectedItemIds.length }} 筆</strong></div>
                 <div><small>月均選取收入</small><strong>{{ money(selectedPlan.monthlyIncome) }}</strong></div>
                 <div><small>月均選取支出</small><strong>{{ money(selectedPlan.monthlyExpense) }}</strong></div>
-                <div class="scenario-summary__total"><small>總月均影響</small><strong>{{ money(selectedMonthlyImpact) }}</strong></div>
                 <div><small>月均淨影響</small><strong>{{ signedMoney(selectedPlan.monthlyNetCashflow) }}</strong></div>
+                <div class="scenario-summary__result"><small>排除選取後的整體月均結果</small><strong>{{ money(selectedMonthlyResult) }}</strong></div>
               </div>
             </template>
           </section>
@@ -460,8 +460,8 @@ watch(() => store.recurringCashflowItems.map((item) => item.id), (itemIds) => {
 .scenario-summary > div { min-width: 0; display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
 .scenario-summary small { color: var(--muted); font-size: .72rem; }
 .scenario-summary strong { overflow: hidden; color: var(--text); font-size: .82rem; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
-.scenario-summary__total { border-color: var(--primary) !important; background: var(--surface) !important; }
-.scenario-summary__total strong { color: var(--primary); }
+.scenario-summary__result { border-color: var(--primary) !important; background: var(--surface) !important; }
+.scenario-summary__result strong { color: var(--primary); }
 .cashflow-group + .cashflow-group { border-top: 1px solid var(--border); }
 .cashflow-group__header { background: var(--surface-muted); }
 .cashflow-group__header > button { width: 100%; min-height: 62px; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 24px; border: 0; background: transparent; color: inherit; cursor: pointer; text-align: left; }
