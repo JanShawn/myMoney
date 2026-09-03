@@ -306,7 +306,7 @@ watch(() => store.recurringCashflowItems.map((item) => item.id), (itemIds) => {
         </UiPanel>
       </div>
 
-      <UiPanel title="週期收支項目" :description="selectionMode ? '勾選想比較的項目，下方會即時計算這些項目對收支的影響。' : sortKey === 'custom' ? `收入 ${incomeItems.length} 筆 · 支出 ${expenseItems.length} 筆；拖曳左側把手即可調整同類項目的順序。` : `收入 ${incomeItems.length} 筆 · 支出 ${expenseItems.length} 筆；目前依指定欄位排序。`" flush>
+      <UiPanel class="cashflow-list-panel" title="週期收支項目" :description="selectionMode ? '勾選想比較的項目，下方會即時計算這些項目對收支的影響。' : sortKey === 'custom' ? `收入 ${incomeItems.length} 筆 · 支出 ${expenseItems.length} 筆；拖曳左側把手即可調整同類項目的順序。` : `收入 ${incomeItems.length} 筆 · 支出 ${expenseItems.length} 筆；目前依指定欄位排序。`" flush>
         <template #action>
           <div class="cashflow-list-actions">
             <button class="btn cashflow-selection-toggle" :class="selectionMode ? 'btn-primary' : 'btn-secondary'" type="button" :aria-pressed="selectionMode" @click="toggleSelectionMode">
@@ -436,6 +436,7 @@ watch(() => store.recurringCashflowItems.map((item) => item.id), (itemIds) => {
 .cashflow-page-actions :deep(.ui-select__trigger) { min-height: 38px; padding-block: 7px; font-size: .8rem; }
 .cashflow-workspace { align-items: start; }
 .cashflow-form-column { position: sticky; top: 18px; }
+.cashflow-list-panel :deep(.panel__header) { padding-bottom: 14px; }
 .cashflow-list-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
 .cashflow-selection-toggle { min-height: 38px; padding: 7px 10px; font-size: .78rem; white-space: nowrap; }
 .cashflow-sort { display: flex; align-items: center; gap: 7px; }
@@ -443,7 +444,7 @@ watch(() => store.recurringCashflowItems.map((item) => item.id), (itemIds) => {
 .cashflow-sort :deep(.ui-select__trigger) { min-height: 38px; padding-block: 7px; font-size: .76rem; }
 .cashflow-sort__direction { min-height: 38px; padding: 7px 10px; font-size: .78rem; white-space: nowrap; }
 .type-choice { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; border: 0; }
-.type-choice legend { grid-column: 1 / -1; margin-bottom: -1px; color: var(--text-soft); font-size: .8rem; font-weight: 720; }
+.type-choice legend { grid-column: 1 / -1; margin-bottom: 3px; color: var(--text-soft); font-size: .8rem; font-weight: 720; }
 .type-choice__button { min-height: 44px; display: flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid var(--border-strong); border-radius: 11px; background: var(--surface); color: var(--muted); cursor: pointer; font-weight: 720; }
 .type-choice__button:hover { border-color: var(--control-hover-border); color: var(--text); }
 .type-choice__button--active { border-color: var(--primary); background: var(--primary-soft); color: var(--primary); box-shadow: 0 0 0 2px var(--control-ring); }
@@ -524,6 +525,7 @@ watch(() => store.recurringCashflowItems.map((item) => item.id), (itemIds) => {
   .cashflow-row__main span { white-space: normal; }
   .cashflow-group__header > button { padding-inline: 18px; }
   .cashflow-workspace :deep(.panel__header) { flex-direction: column; }
+  .cashflow-list-panel :deep(.panel__header) { padding-bottom: 12px; }
   .cashflow-workspace :deep(.panel__action), .cashflow-list-actions, .cashflow-sort { width: 100%; justify-content: stretch; }
   .cashflow-list-actions { flex-wrap: wrap; }
   .cashflow-selection-toggle { flex: 1 1 100%; }
