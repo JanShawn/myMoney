@@ -103,7 +103,7 @@ async function toggleCashReconciliation() {
       title: enabled ? '現金驗算已啟用' : '已切換為帳戶直接管理',
       message: enabled
         ? '「身上現金」的金額改由現金驗算頁管理。'
-        : '現金驗算資料仍會保留，可直接在帳戶結構修改現金金額。'
+        : '現金驗算資料仍會保留；現金帳戶現在可在帳戶結構自由編輯、移動或刪除。'
     })
   } catch (error) {
     store.error = ''
@@ -137,8 +137,8 @@ function formatBytes(bytes) {
         <div class="feature-setting__copy">
           <strong>現金驗算</strong>
           <span v-if="cashReconciliationEnabled">「身上現金」金額由現金驗算頁管理，帳戶結構只負責名稱與分類。</span>
-          <span v-else>隱藏現金驗算入口，直接在帳戶結構修改「身上現金」金額。</span>
-          <small>關閉不會刪除既有驗算明細；之後重新啟用即可繼續使用。</small>
+          <span v-else>隱藏現金驗算入口；現金帳戶會和其他帳戶一樣，可編輯、移動或刪除。</span>
+          <small>關閉本身不會刪除既有驗算明細；重新啟用時，若系統現金帳戶已刪除，會自動補回。</small>
         </div>
         <button class="feature-switch" type="button" role="switch" :aria-checked="cashReconciliationEnabled" :aria-label="cashReconciliationEnabled ? '關閉現金驗算' : '啟用現金驗算'" :disabled="store.saving" @click="toggleCashReconciliation"><span /></button>
       </div>

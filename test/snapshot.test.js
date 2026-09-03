@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createDefaultConfig, normalizeConfig, upsertSnapshot } from '../app/services/money-domain.js'
+import { createDefaultConfig, normalizeConfig, SYSTEM_CASH_GROUP_ID, SYSTEM_CASH_ITEM_ID, upsertSnapshot } from '../app/services/money-domain.js'
 
 describe('snapshot storage', () => {
   it('同一天更新原紀錄，不建立重複日期', () => {
@@ -69,6 +69,48 @@ describe('snapshot storage', () => {
     const cashDrafts = { cash: { baseAmount: 100, rows: [{ label: '零錢', operation: 'add', amount: 25 }] } }
     const config = normalizeConfig({ cashDrafts })
     expect(config.cashDrafts).toEqual(cashDrafts)
+  })
+
+  it('關閉現金驗算後，把系統現金轉回可自由管理的台幣帳戶', () => {
+    const config = normalizeConfig({
+      settings: { cashReconciliationEnabled: false },
+      groups: [{ id: SYSTEM_CASH_GROUP_ID, name: '零用金', order: 2, archived: false, system: true }],
+      items: [{
+        id: SYSTEM_CASH_ITEM_ID,
+        groupId: SYSTEM_CASH_GROUP_ID,
+        name: '隨身錢包',
+        behavior: 'cash',
+        amount: 800,
+        archived: false,
+        system: true
+      }]
+    })
+
+    expect(config.groups[0]).toMatchObject({ id: SYSTEM_CASH_GROUP_ID, name: '零用金', system: false })
+    expect(config.items[0]).toMatchObject({
+      id: SYSTEM_CASH_ITEM_ID,
+      name: '隨身錢包',
+      behavior: 'manual',
+      amount: 800,
+      system: false
+    })
+  })
+
+  it('關閉時不強制補回已刪除的現金結構，重新啟用時才補回', () => {
+    const disabled = normalizeConfig({
+      settings: { cashReconciliationEnabled: false },
+      groups: [],
+      items: []
+    })
+    expect(disabled.groups).toEqual([])
+    expect(disabled.items).toEqual([])
+
+    const enabled = normalizeConfig({
+      ...disabled,
+      settings: { ...disabled.settings, cashReconciliationEnabled: true }
+    })
+    expect(enabled.groups).toContainEqual(expect.objectContaining({ id: SYSTEM_CASH_GROUP_ID, system: true }))
+    expect(enabled.items).toContainEqual(expect.objectContaining({ id: SYSTEM_CASH_ITEM_ID, behavior: 'cash', system: true }))
   })
 
   it('舊外幣帳戶會自動歸到外幣統計類別', () => {

@@ -38,6 +38,7 @@ export const useMoneyStore = defineStore('money', () => {
     .sort((left, right) => Number(left.order || 0) - Number(right.order || 0)))
   const lastSnapshot = computed(() => snapshots.value.at(-1) || null)
   const cloneConfig = (value) => structuredClone(toRaw(value))
+  const cashReconciliationIsEnabled = (draft) => draft.settings?.cashReconciliationEnabled !== false
 
   function applyStorageResult(result) {
     config.value = normalizeConfig(result.data)
@@ -99,8 +100,8 @@ export const useMoneyStore = defineStore('money', () => {
   const updateGroup = (id, body) => mutate((draft) => {
     const group = draft.groups.find((entry) => entry.id === id)
     if (!group) throw new Error('找不到這個群組')
-    if (id === SYSTEM_CASH_GROUP_ID && body.archived === true) throw new Error('「現金」是現金驗算使用的系統群組，不能封存。')
-    if (id === SYSTEM_CASH_GROUP_ID && body.name && body.name !== '現金') throw new Error('「現金」是系統群組，名稱不能變更。')
+    if (cashReconciliationIsEnabled(draft) && id === SYSTEM_CASH_GROUP_ID && body.archived === true) throw new Error('「現金」是現金驗算使用的系統群組，不能封存。')
+    if (cashReconciliationIsEnabled(draft) && id === SYSTEM_CASH_GROUP_ID && body.name && body.name !== '現金') throw new Error('「現金」是系統群組，名稱不能變更。')
     Object.assign(group, body)
     if (body.archived === true) draft.items.filter((item) => item.groupId === id).forEach((item) => { item.archived = true })
     return group
@@ -118,8 +119,8 @@ export const useMoneyStore = defineStore('money', () => {
   const updateItem = (id, body) => mutate((draft) => {
     const item = draft.items.find((entry) => entry.id === id)
     if (!item) throw new Error('找不到這個項目')
-    if (id === SYSTEM_CASH_ITEM_ID && body.archived === true) throw new Error('「身上現金」與現金驗算連動，不能封存。')
-    if (id === SYSTEM_CASH_ITEM_ID && body.groupId && body.groupId !== SYSTEM_CASH_GROUP_ID) throw new Error('系統現金帳戶必須保留在「現金」群組。')
+    if (cashReconciliationIsEnabled(draft) && id === SYSTEM_CASH_ITEM_ID && body.archived === true) throw new Error('「身上現金」與現金驗算連動，不能封存。')
+    if (cashReconciliationIsEnabled(draft) && id === SYSTEM_CASH_ITEM_ID && body.groupId && body.groupId !== SYSTEM_CASH_GROUP_ID) throw new Error('系統現金帳戶必須保留在「現金」群組。')
     const changes = { ...body }
     if (changes.groupId && changes.groupId !== item.groupId && !('order' in changes)) {
       changes.order = draft.items
@@ -128,7 +129,7 @@ export const useMoneyStore = defineStore('money', () => {
     }
     Object.assign(item, changes)
     Object.assign(item, normalizeAccountItem(item))
-    if (id === SYSTEM_CASH_ITEM_ID) Object.assign(item, { groupId: SYSTEM_CASH_GROUP_ID, behavior: 'cash', assetClass: 'cash', liquidity: 'available', includeInAssets: true, currency: 'TWD', exchangeRate: 1, archived: false, system: true })
+    if (cashReconciliationIsEnabled(draft) && id === SYSTEM_CASH_ITEM_ID) Object.assign(item, { groupId: SYSTEM_CASH_GROUP_ID, behavior: 'cash', assetClass: 'cash', liquidity: 'available', includeInAssets: true, currency: 'TWD', exchangeRate: 1, archived: false, system: true })
     return item
   })
 
@@ -163,7 +164,7 @@ export const useMoneyStore = defineStore('money', () => {
   })
 
   const deleteItem = (id) => mutate((draft) => {
-    if (id === SYSTEM_CASH_ITEM_ID) throw new Error('「身上現金」是系統連動帳戶，不能刪除。')
+    if (cashReconciliationIsEnabled(draft) && id === SYSTEM_CASH_ITEM_ID) throw new Error('「身上現金」是系統連動帳戶，不能刪除。')
     const index = draft.items.findIndex((entry) => entry.id === id)
     if (index < 0) throw new Error('找不到要刪除的帳戶或項目。')
     const [item] = draft.items.splice(index, 1)
@@ -226,6 +227,7 @@ export const useMoneyStore = defineStore('money', () => {
 
   const updateSettings = (body) => mutate((draft) => {
     Object.assign(draft.settings, body)
+    if (Object.hasOwn(body, 'cashReconciliationEnabled')) Object.assign(draft, normalizeConfig(draft))
     return draft.settings
   })
 
@@ -314,7 +316,7 @@ export const useMoneyStore = defineStore('money', () => {
   })
 
   const deleteGroup = (id) => mutate((draft) => {
-    if (id === SYSTEM_CASH_GROUP_ID) throw new Error('「現金」是現金驗算使用的系統群組，不能刪除。')
+    if (cashReconciliationIsEnabled(draft) && id === SYSTEM_CASH_GROUP_ID) throw new Error('「現金」是現金驗算使用的系統群組，不能刪除。')
     const index = draft.groups.findIndex((entry) => entry.id === id)
     if (index < 0) throw new Error('找不到要刪除的群組。')
     const itemIds = draft.items.filter((item) => item.groupId === id).map((item) => item.id)

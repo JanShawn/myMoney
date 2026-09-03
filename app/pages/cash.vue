@@ -164,7 +164,7 @@ const money = (value) => new Intl.NumberFormat('zh-TW', { style: 'currency', cur
   <div>
     <PageHeader eyebrow="Cash reconciliation" title="現金驗算" :description="cashReconciliationEnabled ? '直接維護目前現金總額；需要核對時再新增實際明細，系統會自動驗算差額。' : '這項功能目前已關閉；現金金額改由帳戶結構直接管理。'" />
     <UiPanel v-if="!cashReconciliationEnabled">
-      <EmptyState title="現金驗算尚未啟用" description="目前使用帳戶直接管理模式；既有驗算明細仍保留，重新啟用後可以繼續使用。">
+      <EmptyState title="現金驗算尚未啟用" description="目前使用帳戶直接管理模式；現金帳戶可自由編輯、移動或刪除，既有驗算明細仍會保留。">
         <template #action><div class="inline-cluster"><NuxtLink to="/accounts" class="btn btn-primary">前往帳戶結構</NuxtLink><NuxtLink to="/settings" class="btn btn-secondary">調整功能偏好</NuxtLink></div></template>
       </EmptyState>
     </UiPanel>

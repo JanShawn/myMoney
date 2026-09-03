@@ -79,19 +79,24 @@ export function normalizeConfig(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return defaults
   const currentSettings = { ...(input.settings || {}) }
   delete currentSettings.allocationTargets
+  const cashReconciliationEnabled = currentSettings.cashReconciliationEnabled !== false
   const groups = (Array.isArray(input.groups) ? input.groups : defaults.groups).map((group) => ({ ...group }))
   let cashGroup = groups.find((group) => group.id === SYSTEM_CASH_GROUP_ID)
   const usesLegacyDefaultOrder = Number(input.version || 0) < CONFIG_VERSION
     && (matchesGroupOrder(groups, LEGACY_DEFAULT_GROUP_ORDERS)
       || matchesGroupOrder(groups, LEGACY_DEFAULT_GROUP_ORDERS_WITHOUT_CASH))
-  if (!cashGroup) {
-    for (const group of groups) {
-      group.order = Number(group.order) + 1
+  if (cashReconciliationEnabled) {
+    if (!cashGroup) {
+      for (const group of groups) {
+        group.order = Number(group.order) + 1
+      }
+      cashGroup = createSystemCashGroup()
+      groups.push(cashGroup)
+    } else {
+      Object.assign(cashGroup, { name: '現金', archived: false, system: true })
     }
-    cashGroup = createSystemCashGroup()
-    groups.push(cashGroup)
-  } else {
-    Object.assign(cashGroup, { name: '現金', archived: false, system: true })
+  } else if (cashGroup) {
+    cashGroup.system = false
   }
   if (usesLegacyDefaultOrder) {
     for (const group of groups) {
@@ -101,22 +106,27 @@ export function normalizeConfig(input) {
 
   const items = (Array.isArray(input.items) ? input.items : defaults.items).map(normalizeAccountItem)
   let cashItem = items.find((item) => item.id === SYSTEM_CASH_ITEM_ID)
-  if (!cashItem) {
-    cashItem = createSystemCashItem()
-    items.push(cashItem)
-  } else {
-    Object.assign(cashItem, {
-      groupId: SYSTEM_CASH_GROUP_ID,
-      name: cashItem.name || '身上現金',
-      behavior: 'cash',
-      assetClass: 'cash',
-      liquidity: 'available',
-      includeInAssets: true,
-      currency: 'TWD',
-      exchangeRate: 1,
-      archived: false,
-      system: true
-    })
+  if (cashReconciliationEnabled) {
+    if (!cashItem) {
+      cashItem = createSystemCashItem()
+      items.push(cashItem)
+    } else {
+      Object.assign(cashItem, {
+        groupId: SYSTEM_CASH_GROUP_ID,
+        name: cashItem.name || '身上現金',
+        behavior: 'cash',
+        assetClass: 'cash',
+        liquidity: 'available',
+        includeInAssets: true,
+        currency: 'TWD',
+        exchangeRate: 1,
+        archived: false,
+        system: true
+      })
+    }
+  } else if (cashItem) {
+    cashItem.system = false
+    if (cashItem.behavior === 'cash') Object.assign(cashItem, normalizeAccountItem({ ...cashItem, behavior: 'manual' }))
   }
   return {
     ...defaults,
