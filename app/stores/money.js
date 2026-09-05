@@ -144,7 +144,9 @@ export const useMoneyStore = defineStore('money', () => {
     if (cashReconciliationIsEnabled(draft) && id === SYSTEM_CASH_ITEM_ID && body.archived === true) throw new Error('「身上現金」與現金驗算連動，不能封存。')
     if (cashReconciliationIsEnabled(draft) && id === SYSTEM_CASH_ITEM_ID && body.groupId && body.groupId !== SYSTEM_CASH_GROUP_ID) throw new Error('系統現金帳戶必須保留在「現金」群組。')
     const changes = {}
-    for (const key of ['groupId', 'name', 'behavior', 'amount', 'currency', 'exchangeRate', 'liquidity', 'order', 'archived']) {
+    const editableKeys = ['groupId', 'name', 'behavior', 'amount', 'currency', 'exchangeRate', 'liquidity', 'order', 'archived']
+    if (id === SYSTEM_CASH_ITEM_ID) editableKeys.push('lastReconciledAt', 'lastReconciledAmount', 'lastReconciledDifference')
+    for (const key of editableKeys) {
       if (Object.hasOwn(body, key)) changes[key] = body[key]
     }
     if (changes.groupId && changes.groupId !== item.groupId && !('order' in changes)) {

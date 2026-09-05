@@ -92,6 +92,25 @@ function updateAdjustment(row, event) {
   row.amount = sanitized ? Number(sanitized) : ''
   event.target.value = formatIntegerInput(row.amount)
 }
+function focusCashInput(id) {
+  nextTick(() => document.getElementById(id)?.focus())
+}
+function moveFromExpectedAmount(event) {
+  if (event.shiftKey || !rows.value.length) return
+  event.preventDefault()
+  focusCashInput(`cash-value-${rows.value[0].id}`)
+}
+function moveBetweenAdjustmentAmounts(index, event) {
+  if (event.shiftKey && index === 0) {
+    event.preventDefault()
+    focusCashInput('cash-expected')
+    return
+  }
+  const targetRow = rows.value[index + (event.shiftKey ? -1 : 1)]
+  if (!targetRow) return
+  event.preventDefault()
+  focusCashInput(`cash-value-${targetRow.id}`)
+}
 function draftPayload() {
   return {
     expectedAmount: Number(expectedAmount.value || 0),
@@ -174,7 +193,7 @@ const money = (value) => new Intl.NumberFormat('zh-TW', { style: 'currency', cur
         <div v-if="selected" class="stack">
           <div class="baseline-card">
             <div><span class="baseline-card__eyebrow">對帳基準</span><label for="cash-expected">目前現金總金額</label><small>預設帶入「身上現金」目前的帳面金額，可直接修改。</small></div>
-            <input id="cash-expected" :value="formatIntegerInput(expectedAmount)" class="input input--amount baseline-card__input" type="text" inputmode="numeric" pattern="[0-9,]*" @input="updateExpectedAmount" />
+            <input id="cash-expected" :value="formatIntegerInput(expectedAmount)" class="input input--amount baseline-card__input" type="text" inputmode="numeric" pattern="[0-9,]*" @input="updateExpectedAmount" @keydown.tab="moveFromExpectedAmount" />
           </div>
           <div class="detail-heading"><div><h3>實際現金明細</h3><p>逐項加入實際持有的現金；需要扣除代墊或支出時切換為「扣除」。</p></div></div>
           <div v-for="(row, index) in rows" :key="row.id" class="adjustment-row" :class="`adjustment-row--${row.operation}`">
@@ -186,7 +205,7 @@ const money = (value) => new Intl.NumberFormat('zh-TW', { style: 'currency', cur
                 <button class="operation-button operation-button--subtract" :class="{ active: row.operation === 'subtract' }" type="button" :aria-pressed="row.operation === 'subtract'" @click="row.operation = 'subtract'"><Minus :size="16" />扣除</button>
               </div>
             </div>
-            <div class="field"><label :for="`cash-value-${row.id}`">金額</label><input :id="`cash-value-${row.id}`" :value="formatIntegerInput(row.amount)" class="input input--amount" type="text" inputmode="numeric" pattern="[0-9,]*" placeholder="請輸入正整數" @input="updateAdjustment(row, $event)" /></div>
+            <div class="field"><label :for="`cash-value-${row.id}`">金額</label><input :id="`cash-value-${row.id}`" :value="formatIntegerInput(row.amount)" class="input input--amount" type="text" inputmode="numeric" pattern="[0-9,]*" placeholder="請輸入正整數" @input="updateAdjustment(row, $event)" @keydown.tab="moveBetweenAdjustmentAmounts(index, $event)" /></div>
             <div class="adjustment-actions">
               <button class="btn btn-ghost btn-icon" type="button" :aria-label="`上移項目 ${index + 1}`" :disabled="index === 0" @click="moveRow(index, -1)"><ArrowUp :size="16" /></button>
               <button class="btn btn-ghost btn-icon" type="button" :aria-label="`下移項目 ${index + 1}`" :disabled="index === rows.length - 1" @click="moveRow(index, 1)"><ArrowDown :size="16" /></button>

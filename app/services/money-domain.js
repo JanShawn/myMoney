@@ -107,7 +107,10 @@ export function normalizeAccountItem(input = {}, fallbackOrder = 0) {
     exchangeRate: foreign ? Math.max(0, finiteNumber(input.exchangeRate)) : 1,
     order: Number.isFinite(Number(input.order)) ? Number(input.order) : fallbackOrder,
     archived: Boolean(input.archived),
-    system: Boolean(input.system)
+    system: Boolean(input.system),
+    lastReconciledAt: typeof input.lastReconciledAt === 'string' ? clipString(input.lastReconciledAt, 64) : null,
+    lastReconciledAmount: input.lastReconciledAmount == null ? null : Math.max(0, finiteNumber(input.lastReconciledAmount)),
+    lastReconciledDifference: input.lastReconciledDifference == null ? null : finiteNumber(input.lastReconciledDifference)
   }
 }
 
@@ -386,14 +389,16 @@ export function calculateSummary(config) {
     .filter((item) => ['cash', 'foreign'].includes(item.assetClass) && item.liquidity !== 'locked')
     .reduce((sum, item) => sum + itemValue(item), 0)
   const restrictedCash = totalCash + totalForeign - availableCash
+  const netWorth = totalAssets - totalLiabilities
 
   return {
     totalAssets: round(totalAssets), totalLiabilities: round(totalLiabilities),
-    netWorth: round(totalAssets - totalLiabilities), availableAssets: round(availableAssets),
+    netWorth: round(netWorth), availableAssets: round(availableAssets),
     availableCash: round(availableCash), restrictedCash: round(restrictedCash),
     totalStocks: round(totalStocks), stockRatio: totalAssets ? round(totalStocks / totalAssets, 6) : 0,
     totalBonds: round(totalBonds), bondRatio: totalAssets ? round(totalBonds / totalAssets, 6) : 0,
     totalStockExposure: round(totalStockExposure), totalBondExposure: round(totalBondExposure),
+    stockExposureRatio: netWorth > 0 ? round(totalStockExposure / netWorth, 6) : null,
     totalInvestmentExposure: round(totalStockExposure + totalBondExposure),
     totalCash: round(totalCash), totalForeign: round(totalForeign),
     totalOther: round(Math.max(0, totalAssets - totalStocks - totalBonds - totalCash - totalForeign))

@@ -36,20 +36,20 @@ const hasAllocationData = computed(() => Number(store.summary?.totalAssets) > 0 
 const allocationBase = computed(() => Number(store.summary?.availableCash || 0) + Number(store.summary?.totalStocks || 0) + Number(store.summary?.totalBonds || 0))
 const investedAmount = computed(() => Number(store.summary?.totalStocks || 0) + Number(store.summary?.totalBonds || 0))
 const investmentExposure = computed(() => Number(store.summary?.totalInvestmentExposure || 0))
-const cashAllocationRatio = computed(() => allocationBase.value ? Number(store.summary?.availableCash || 0) / allocationBase.value : 0)
+const availableCashAssetRatio = computed(() => Number(store.summary?.totalAssets) ? Number(store.summary?.availableCash || 0) / Number(store.summary.totalAssets) : 0)
 const weightedLeverage = computed(() => investedAmount.value ? investmentExposure.value / investedAmount.value : 0)
-const allocationRows = computed(() => [
-  { key: 'cash', label: '可動用現金', current: Number(store.summary?.availableCash || 0), exposure: null, color: chartColors.value.cash },
-  { key: 'stocks', label: '股票市值', current: Number(store.summary?.totalStocks || 0), exposure: Number(store.summary?.totalStockExposure || 0), color: chartColors.value.stocks },
-  { key: 'bonds', label: '債券市值', current: Number(store.summary?.totalBonds || 0), exposure: Number(store.summary?.totalBondExposure || 0), color: chartColors.value.bonds }
-].map((row) => ({
-  ...row,
-  ratio: allocationBase.value ? row.current / allocationBase.value : 0,
-  exposureRatio: allocationBase.value && row.exposure != null ? row.exposure / allocationBase.value : null,
-  positionLeverage: row.current && row.exposure != null ? row.exposure / row.current : null
-})))
-const stockAllocation = computed(() => allocationRows.value.find((row) => row.key === 'stocks'))
-const bondAllocation = computed(() => allocationRows.value.find((row) => row.key === 'bonds'))
+const stockAllocation = computed(() => {
+  const current = Number(store.summary?.totalStocks || 0)
+  const exposure = Number(store.summary?.totalStockExposure || 0)
+  const exposureRatio = store.summary?.stockExposureRatio
+  return {
+    current,
+    exposure,
+    ratio: allocationBase.value ? current / allocationBase.value : 0,
+    exposureRatio: exposureRatio == null ? null : Number(exposureRatio),
+    positionLeverage: current ? exposure / current : 0
+  }
+})
 const recordYears = computed(() => [...new Set(store.snapshots
   .map((record) => String(record.date || '').slice(0, 4))
   .filter((year) => /^\d{4}$/.test(year)))].sort((left, right) => right.localeCompare(left)))
@@ -168,14 +168,14 @@ const marketData = computed(() => ({
           <span>總資產 {{ displayMoney(store.summary?.totalAssets) }} · 負債 {{ displayMoney(store.summary?.totalLiabilities) }}</span>
         </div>
         <div class="overview-facts">
-          <div class="overview-fact"><div><Banknote :size="16" aria-hidden="true" /><span>可動用現金</span></div><strong>{{ displayMoney(store.summary?.availableCash) }}</strong><small>不含受限制帳戶</small></div>
+          <div class="overview-fact"><div><Banknote :size="16" aria-hidden="true" /><span>可動用現金</span></div><strong>{{ displayMoney(store.summary?.availableCash) }}</strong><small>{{ (availableCashAssetRatio * 100).toFixed(1) }}% 總資產</small></div>
           <div class="overview-fact"><div><TrendingUp :size="16" aria-hidden="true" /><span>持有股票</span></div><strong>{{ displayMoney(store.summary?.totalStocks) }}</strong><small>{{ ((store.summary?.stockRatio || 0) * 100).toFixed(1) }}% 總資產</small></div>
           <div class="overview-fact"><div><Landmark :size="16" aria-hidden="true" /><span>持有債券</span></div><strong>{{ displayMoney(store.summary?.totalBonds) }}</strong><small>{{ ((store.summary?.bondRatio || 0) * 100).toFixed(1) }}% 總資產</small></div>
           <div class="overview-fact overview-fact--date"><div><Clock3 :size="16" aria-hidden="true" /><span>上次資產盤點</span></div><strong>{{ dateTime(store.lastSnapshot?.verifiedAt) }}</strong><small>以最近保存的快照為準</small></div>
         </div>
       </section>
 
-      <UiPanel class="space-before allocation-panel" title="曝險比例與資金配置" description="聚焦部位加權、現金配置，以及股票的實際淨曝險。" compact>
+      <UiPanel class="space-before allocation-panel" title="曝險比例" description="聚焦部位加權與股票的實際淨曝險。" compact>
         <div class="allocation-current">
           <div class="position-leverage-summary" :class="{ negative: weightedLeverage < 0 }">
             <div><span>部位加權</span><small>淨曝險值 ÷ 股票與債券市值</small></div>
@@ -185,15 +185,10 @@ const marketData = computed(() => ({
           <div v-if="allocationBase" class="allocation-table">
             <section class="stock-allocation-row" aria-labelledby="stock-allocation-title">
               <div class="allocation-identity"><h3 id="stock-allocation-title">股票市值</h3><strong>{{ displayMoney(stockAllocation?.current) }}</strong><small>市值配置 {{ ((stockAllocation?.ratio || 0) * 100).toFixed(1) }}%</small></div>
-              <div class="allocation-stat" :class="{ negative: stockAllocation?.exposureRatio < 0 }"><span>淨曝險比例</span><strong>{{ ((stockAllocation?.exposureRatio || 0) * 100).toFixed(1) }}%</strong></div>
+              <div class="allocation-stat" :class="{ negative: stockAllocation?.exposureRatio < 0 }"><span>淨曝險比例<small>淨曝險 ÷ 淨資產</small></span><strong>{{ stockAllocation?.exposureRatio == null ? '—' : `${(stockAllocation.exposureRatio * 100).toFixed(1)}%` }}</strong></div>
               <div class="allocation-stat"><span>淨曝險值</span><strong>{{ displayMoney(stockAllocation?.exposure) }}</strong></div>
               <div class="allocation-stat"><span>商品加權槓桿</span><strong>{{ (stockAllocation?.positionLeverage || 0).toFixed(2) }}×</strong></div>
             </section>
-
-            <div class="support-allocation-rows">
-              <section class="support-allocation-row" aria-labelledby="cash-allocation-title"><h3 id="cash-allocation-title">可動用現金</h3><div><span>配置比例</span><strong>{{ (cashAllocationRatio * 100).toFixed(1) }}%</strong></div><div><span>投入金額</span><strong>{{ displayMoney(store.summary?.availableCash) }}</strong></div></section>
-              <section class="support-allocation-row" aria-labelledby="bond-allocation-title"><h3 id="bond-allocation-title">債券市值</h3><div><span>市值配置</span><strong>{{ ((bondAllocation?.ratio || 0) * 100).toFixed(1) }}%</strong></div><div><span>目前市值</span><strong>{{ displayMoney(bondAllocation?.current) }}</strong></div></section>
-            </div>
           </div>
           <AppNotice v-if="!allocationBase" title="還沒有可試算的配置">建立現金帳戶或投資持倉後，這裡會自動顯示淨曝險比例。</AppNotice>
         </div>
@@ -297,25 +292,21 @@ const marketData = computed(() => ({
 .overview-fact > small { display: block; margin-top: 3px; color: var(--muted); font-size: .75rem; }
 .overview-fact--date > strong { font-size: .88rem; line-height: 1.35; }
 .allocation-current { display: grid; gap: 0; }
-.position-leverage-summary { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 0 0 13px; border-bottom: 1px solid var(--border); }
+.position-leverage-summary { display: flex; align-items: center; justify-content: flex-start; gap: 14px; padding: 0 0 13px; border-bottom: 1px solid var(--border); }
 .position-leverage-summary > div { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; }
 .position-leverage-summary span { color: var(--text-soft); font-size: .8rem; font-weight: 760; }
 .position-leverage-summary small { color: var(--muted); font-size: .76rem; }
 .position-leverage-summary > strong { color: var(--primary); font-size: 1.55rem; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -.035em; }
 .position-leverage-summary.negative > strong { color: var(--danger); }
-.stock-allocation-row { display: grid; grid-template-columns: minmax(185px, 1.15fr) repeat(3, minmax(0, 1fr)); align-items: center; padding: 13px 0; border-bottom: 1px solid var(--border); }
+.stock-allocation-row { display: grid; grid-template-columns: minmax(185px, 1.15fr) repeat(3, minmax(0, 1fr)); align-items: center; padding-top: 13px; }
 .allocation-identity { display: grid; gap: 3px; padding-right: 16px; }
-.allocation-identity h3, .support-allocation-row h3 { margin: 0; color: var(--text); font-size: .8rem; }
+.allocation-identity h3 { margin: 0; color: var(--text); font-size: .8rem; }
 .allocation-identity strong { font-size: 1.08rem; font-variant-numeric: tabular-nums; }
 .allocation-identity small { color: var(--muted); font-size: .75rem; }
 .allocation-stat { display: grid; gap: 4px; min-width: 0; padding-left: 16px; border-left: 1px solid var(--border); }
-.allocation-stat span, .support-allocation-row span { color: var(--muted); font-size: .75rem; font-weight: 700; }
-.allocation-stat strong, .support-allocation-row strong { color: var(--primary); font-size: .94rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.support-allocation-rows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.support-allocation-row { display: grid; grid-template-columns: minmax(105px, 1fr) repeat(2, minmax(0, 1fr)); align-items: center; gap: 12px; padding-top: 13px; }
-.support-allocation-row + .support-allocation-row { margin-left: 18px; padding-left: 18px; border-left: 1px solid var(--border); }
-.support-allocation-row > div { display: grid; gap: 3px; min-width: 0; }
-.support-allocation-row strong { color: var(--text); font-size: .85rem; }
+.allocation-stat span { color: var(--muted); font-size: .75rem; font-weight: 700; }
+.allocation-stat span small { display: block; margin-top: 2px; color: var(--muted); font-size: .68rem; font-weight: 500; }
+.allocation-stat strong { color: var(--primary); font-size: .94rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .market-history-panel :deep(.panel__body) { display: grid; gap: 12px; }
 .year-pager { display: grid; grid-template-columns: 28px auto auto 28px; align-items: center; gap: 4px; min-height: 28px; padding: 1px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-muted); }
 .year-pager strong { color: var(--text); font-size: .74rem; white-space: nowrap; }
@@ -345,9 +336,6 @@ const marketData = computed(() => ({
   .stock-allocation-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .allocation-identity { grid-column: 1 / -1; margin-bottom: 11px; padding: 0 0 11px; border-bottom: 1px solid var(--border); }
   .allocation-stat:nth-child(2) { padding-left: 0; border-left: 0; }
-  .support-allocation-rows { grid-template-columns: 1fr; }
-  .support-allocation-row { grid-template-columns: minmax(140px, 1fr) minmax(110px, .7fr) minmax(170px, 1fr); }
-  .support-allocation-row + .support-allocation-row { margin: 12px 0 0; padding: 12px 0 0; border-top: 1px solid var(--border); border-left: 0; }
 }
 @media (max-width: 620px) {
   .dashboard-actions { width: 100%; }
@@ -362,8 +350,6 @@ const marketData = computed(() => ({
   .allocation-identity { margin-bottom: 0; padding: 0 0 10px; }
   .allocation-stat { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 9px 0; border-left: 0; border-bottom: 1px solid var(--border); }
   .allocation-stat:last-child { border-bottom: 0; }
-  .support-allocation-row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; }
-  .support-allocation-row h3 { grid-column: 1 / -1; }
   .month-board { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .record-detail { flex-direction: column; }
   .market-history-panel :deep(.panel__header) { flex-direction: column; }

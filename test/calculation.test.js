@@ -26,6 +26,7 @@ describe('calculateSummary', () => {
     expect(summary.totalBonds).toBe(1000)
     expect(summary.totalStockExposure).toBe(2000)
     expect(summary.totalBondExposure).toBe(1000)
+    expect(summary.stockExposureRatio).toBe(0.196078)
     expect(summary.totalInvestmentExposure).toBe(3000)
     expect(summary.totalCash).toBe(10000)
     expect(summary.totalForeign).toBe(3200)
@@ -64,6 +65,21 @@ describe('calculateSummary', () => {
     expect(summary.totalBonds).toBe(1000)
     expect(summary.totalStockExposure).toBe(-3000)
     expect(summary.totalBondExposure).toBe(0)
+    expect(summary.stockExposureRatio).toBe(-1.5)
+  })
+
+  it('淨資產不是正數時不產生誤導性的曝險比例', () => {
+    const summary = calculateSummary({
+      items: [
+        { amount: 1000, exchangeRate: 1, currency: 'TWD', assetClass: 'liability', includeInAssets: false, archived: false }
+      ],
+      holdings: [
+        { quantity: 10, price: 100, leverage: 1, assetClass: 'equity', archived: false }
+      ]
+    })
+
+    expect(summary.netWorth).toBe(0)
+    expect(summary.stockExposureRatio).toBeNull()
   })
 
   it('持倉資產類別只保留股票與債券', () => {

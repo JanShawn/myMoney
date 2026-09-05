@@ -74,6 +74,23 @@ describe('snapshot storage', () => {
     })
   })
 
+  it('保留系統現金帳戶的最近驗算紀錄', () => {
+    const config = normalizeConfig({
+      items: [{
+        id: SYSTEM_CASH_ITEM_ID,
+        behavior: 'cash',
+        lastReconciledAt: '2026-09-03T12:34:56.000Z',
+        lastReconciledAmount: 3200,
+        lastReconciledDifference: -150
+      }]
+    })
+    expect(config.items.find((item) => item.id === SYSTEM_CASH_ITEM_ID)).toMatchObject({
+      lastReconciledAt: '2026-09-03T12:34:56.000Z',
+      lastReconciledAmount: 3200,
+      lastReconciledDifference: -150
+    })
+  })
+
   it('丟棄未知頂層欄位與持倉 yahooUrl', () => {
     const config = normalizeConfig({
       evil: { nested: true },
