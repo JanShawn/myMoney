@@ -107,6 +107,7 @@ describe('IndexedDB 備份異動摘要', () => {
     expect(data.items).toHaveLength(1)
     expect(data.items[0]).toMatchObject({ id: 'item-cash', amount: 0, system: true })
     expect(data.holdings).toEqual([])
+    expect(data.stockBuyList).toEqual([])
     expect(data.snapshots).toEqual([])
     expect(data.recurringCashflowItems).toEqual([])
   })

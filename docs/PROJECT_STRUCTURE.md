@@ -38,6 +38,7 @@ app/
 | `/` | `pages/index.vue` | 資產總覽、曝險、趨勢圖、盤點與大盤紀錄 |
 | `/accounts` | `pages/accounts.vue` | 帳戶群組與項目 |
 | `/investments` | `pages/investments.vue` | 投資持倉 |
+| `/buy-list` | `pages/buy-list.vue` | 每日股票待買清單 |
 | `/cash` | `pages/cash.vue` | 現金驗算（可在設定關閉） |
 | `/cashflow` | `pages/cashflow.vue` | 週期收支規劃與選取試算 |
 | `/snapshot` | `pages/snapshot.vue` | 當日資產盤點 |

@@ -1,5 +1,5 @@
 <script setup>
-import { BarChart3, CalendarRange, ClipboardCheck, Landmark, Moon, Settings, Sun, WalletCards, WalletMinimal } from '@lucide/vue'
+import { BarChart3, CalendarRange, ClipboardCheck, Landmark, ListChecks, Moon, Settings, Sun, WalletCards, WalletMinimal } from '@lucide/vue'
 import { useMoneyStore } from '~/stores/money'
 
 const store = useMoneyStore()
@@ -16,6 +16,7 @@ const links = [
   { to: '/cash', label: '現金驗算', mobileLabel: '現金', icon: WalletMinimal },
   { to: '/accounts', label: '帳戶結構', mobileLabel: '帳戶', icon: Landmark },
   { to: '/investments', label: '投資持倉', mobileLabel: '投資', icon: WalletCards },
+  { to: '/buy-list', label: '股票待買清單', mobileLabel: '待買', icon: ListChecks },
   { to: '/snapshot', label: '資產盤點', mobileLabel: '盤點', icon: ClipboardCheck },
   { to: '/cashflow', label: '收支規劃', mobileLabel: '收支', icon: CalendarRange },
   { to: '/settings', label: '設定', mobileLabel: '設定', icon: Settings }

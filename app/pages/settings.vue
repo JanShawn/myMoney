@@ -190,7 +190,7 @@ function formatBytes(bytes) {
           <div v-for="backup in backups" :key="backup.createdAt" class="backup-item">
             <div class="backup-item__copy">
               <strong>{{ formatDate(backup.createdAt) }}</strong>
-              <span>{{ backup.accounts }} 個帳戶 · {{ backup.holdings }} 筆持倉 · {{ backup.recurringCashflowItems || 0 }} 筆週期收支 · {{ backup.snapshots }} 筆盤點</span>
+              <span>{{ backup.accounts }} 個帳戶 · {{ backup.holdings }} 筆持倉 · {{ backup.stockBuyListItems || 0 }} 檔待買股票 · {{ backup.recurringCashflowItems || 0 }} 筆週期收支 · {{ backup.snapshots }} 筆盤點</span>
               <small>資料最後保存：{{ formatDate(backup.lastSavedAt) }}</small>
               <div class="backup-version-tags">
                 <span v-if="backup.matchesCurrent" class="pill pill-blue">目前瀏覽器版本</span>
@@ -218,14 +218,14 @@ function formatBytes(bytes) {
       <button class="btn btn-secondary" type="button" :disabled="store.saving || !store.snapshots.length" @click="exportExcel"><Download :size="18" />下載盤點 Excel</button>
     </UiPanel>
 
-    <UiPanel title="重設資料" description="清空目前的帳戶、持倉、盤點與週期收支，回到初始狀態。" class="settings-section danger-zone">
+    <UiPanel title="重設資料" description="清空目前的帳戶、持倉、待買股票、盤點與週期收支，回到初始狀態。" class="settings-section danger-zone">
       <template #action><Trash2 :size="22" aria-hidden="true" /></template>
-      <p class="danger-zone__description">重設前會自動保留一份近期版本；既有的 JSON 備份檔案與備份紀錄不會被刪除。</p>
+      <p class="danger-zone__description">重設前會自動保留一份近期版本；電腦上的 JSON 備份檔案不會被刪除，瀏覽器中的尚未備份狀態會一併清除。</p>
       <button class="btn btn-danger" type="button" :disabled="store.saving" @click="pendingReset = true"><Trash2 :size="18" />重設所有資料</button>
     </UiPanel>
 
     <ConfirmDialog :open="Boolean(pendingImport)" :title="`從「${pendingImport?.fileName || 'JSON'}」復原？`" confirm-label="確認復原" tone="warning" :busy="store.saving" @close="pendingImport = null" @confirm="confirmImport">
-      <p>檔案內有 {{ pendingImport?.summary?.accounts || 0 }} 個帳戶、{{ pendingImport?.summary?.holdings || 0 }} 筆持倉、{{ pendingImport?.summary?.recurringCashflowItems || 0 }} 筆週期收支、{{ pendingImport?.summary?.snapshots || 0 }} 筆盤點。</p>
+      <p>檔案內有 {{ pendingImport?.summary?.accounts || 0 }} 個帳戶、{{ pendingImport?.summary?.holdings || 0 }} 筆持倉、{{ pendingImport?.summary?.stockBuyListItems || 0 }} 檔待買股票、{{ pendingImport?.summary?.recurringCashflowItems || 0 }} 筆週期收支、{{ pendingImport?.summary?.snapshots || 0 }} 筆盤點。</p>
       <p v-if="pendingImport?.changes?.length">與目前瀏覽器資料相比，會產生 {{ pendingImport.changes.length }} 項變更。</p>
       <p v-else>檔案內容與目前瀏覽器資料沒有實質差異。</p>
       <AppNotice v-if="pendingImport && !pendingImport.hasUserData" tone="warning" title="這份檔案沒有使用者資料">復原後會只剩下系統預設帳戶，請確認這是你要的版本。</AppNotice>
@@ -233,8 +233,9 @@ function formatBytes(bytes) {
     </ConfirmDialog>
 
     <ConfirmDialog :open="pendingReset" title="確定要重設所有資料？" confirm-label="確認重設" :busy="store.saving" @close="pendingReset = false" @confirm="resetAllData">
-      <p>目前的帳戶、持倉、盤點、現金驗算與週期收支都會清空，系統會回到初始狀態。</p>
+      <p>目前的帳戶、持倉、待買股票、盤點、現金驗算與週期收支都會清空，系統會回到初始狀態。</p>
       <p><strong>重設前的內容會先保留在近期版本</strong>，之後仍可從上方的「瀏覽器近期版本」復原。</p>
+      <p>「變更尚未備份」狀態也會清除；已下載到電腦的 JSON 檔案不受影響。</p>
     </ConfirmDialog>
   </div>
 </template>
