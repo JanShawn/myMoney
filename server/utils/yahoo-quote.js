@@ -1,4 +1,8 @@
 const YAHOO_CHART_URL = 'https://query1.finance.yahoo.com/v8/finance/chart'
+const YAHOO_TW_QUOTE_URL = 'https://tw.stock.yahoo.com/quote'
+const yahooNameCache = new Map()
+const NAME_CACHE_TTL = 24 * 60 * 60 * 1000
+const NAME_CACHE_LIMIT = 500
 
 const toPositiveNumber = (value) => {
   const number = Number(value)
@@ -36,6 +40,7 @@ export function parseYahooChartQuote(payload, requestedSymbol = '') {
   }
 
   const symbol = String(meta.symbol || requestedSymbol).trim().toUpperCase()
+  const name = String(meta.longName || meta.shortName || meta.displayName || '').trim()
   const currentPrice = toPositiveNumber(meta.regularMarketPrice) ?? latestMinutePrice
   const openPrice = minuteOpens.map(toPositiveNumber).find((value) => value != null)
     ?? toPositiveNumber(meta.regularMarketOpen)
@@ -45,6 +50,8 @@ export function parseYahooChartQuote(payload, requestedSymbol = '') {
   return {
     symbol,
     ticker: symbol.replace(/\.(?:TW|TWO)$/, ''),
+    name,
+    market: symbol.endsWith('.TWO') ? 'TPEx' : 'TWSE',
     currentPrice,
     openPrice,
     previousClose: toPositiveNumber(meta.chartPreviousClose ?? meta.previousClose),
@@ -54,15 +61,46 @@ export function parseYahooChartQuote(payload, requestedSymbol = '') {
   }
 }
 
+export function parseYahooQuotePageName(html) {
+  const match = String(html || '').match(/"symbolName":"((?:\\.|[^"\\])*)"/)
+  if (!match) return ''
+  try {
+    return JSON.parse(`"${match[1]}"`).trim()
+  } catch {
+    return ''
+  }
+}
+
+async function fetchYahooQuoteName(symbol) {
+  const cached = yahooNameCache.get(symbol)
+  if (cached && cached.expiresAt > Date.now()) return cached.name
+
+  const response = await fetch(`${YAHOO_TW_QUOTE_URL}/${encodeURIComponent(symbol)}`, {
+    headers: { accept: 'text/html', 'user-agent': 'Mozilla/5.0' },
+    signal: AbortSignal.timeout(8000)
+  })
+  if (!response.ok) throw new Error(`Yahoo Finance 名稱請求失敗（HTTP ${response.status}）。`)
+  const name = parseYahooQuotePageName(await response.text())
+  if (!name) throw new Error(`Yahoo Finance 沒有回傳 ${symbol} 的商品名稱。`)
+
+  yahooNameCache.set(symbol, { name, expiresAt: Date.now() + NAME_CACHE_TTL })
+  if (yahooNameCache.size > NAME_CACHE_LIMIT) yahooNameCache.delete(yahooNameCache.keys().next().value)
+  return name
+}
+
 export async function fetchYahooChartQuote(symbol) {
   const normalized = String(symbol || '').trim().toUpperCase()
   if (!/^[0-9A-Z]{2,12}\.(?:TW|TWO)$/.test(normalized)) throw new Error('股票代號格式不正確。')
 
   const query = new URLSearchParams({ interval: '1m', range: '1d', includePrePost: 'false' })
-  const response = await fetch(`${YAHOO_CHART_URL}/${encodeURIComponent(normalized)}?${query}`, {
-    headers: { accept: 'application/json', 'user-agent': 'Mozilla/5.0' },
-    signal: AbortSignal.timeout(8000)
-  })
+  const [response, localizedName] = await Promise.all([
+    fetch(`${YAHOO_CHART_URL}/${encodeURIComponent(normalized)}?${query}`, {
+      headers: { accept: 'application/json', 'user-agent': 'Mozilla/5.0' },
+      signal: AbortSignal.timeout(8000)
+    }),
+    fetchYahooQuoteName(normalized).catch(() => '')
+  ])
   if (!response.ok) throw new Error(`Yahoo Finance 行情請求失敗（HTTP ${response.status}）。`)
-  return parseYahooChartQuote(await response.json(), normalized)
+  const quote = parseYahooChartQuote(await response.json(), normalized)
+  return { ...quote, name: localizedName || quote.name }
 }

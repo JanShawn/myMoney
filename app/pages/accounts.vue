@@ -163,8 +163,18 @@ async function moveGroup(group, direction) {
   }
 }
 function editItem(item) {
+  if (editing.value?.id === item.id) {
+    editing.value = null
+    return
+  }
   editing.value = { ...item }
   if (item.behavior === 'foreign') applyExchangeRate(editing.value)
+}
+function revealInlineEditor(itemId) {
+  const editor = document.getElementById(`account-editor-${itemId}`)
+  const nameInput = document.getElementById(`edit-name-${itemId}`)
+  nameInput?.focus({ preventScroll: true })
+  editor?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
 }
 async function saveEdit() {
   if (editing.value.behavior === 'foreign' && !(Number(editing.value.exchangeRate) > 0)) {
@@ -315,27 +325,6 @@ async function dropItemOnItem(target, event) {
       </div>
 
       <div class="stack">
-        <UiPanel v-if="editing" eyebrow="Edit item" :title="`編輯 ${editing.name}`" description="變更會直接更新目前連結的資料。">
-          <template #action><button class="btn btn-ghost" type="button" @click="editing = null">取消</button></template>
-          <form class="form-grid" @submit.prevent="saveEdit">
-            <div class="field"><label for="edit-group">所屬群組</label><UiSelect id="edit-group" v-model="editing.groupId" :options="groupOptions" :disabled="editing.system" /></div>
-            <div class="field"><label for="edit-name">名稱</label><input id="edit-name" v-model="editing.name" class="input" required /></div>
-            <div class="field"><label for="edit-behavior">帳戶類型</label><div v-if="editing.system" class="locked-field">系統現金（固定）</div><UiSelect v-else id="edit-behavior" v-model="editing.behavior" :options="editBehaviorOptions" /></div>
-            <div class="field"><label for="edit-amount">目前金額{{ editing.behavior === 'foreign' ? `（${editing.currency}）` : '' }}</label><FormattedNumberInput id="edit-amount" v-model="editing.amount" class="input input--amount" :min="0" :max-fraction-digits="2" :disabled="editing.system && cashReconciliationEnabled" /><span v-if="editing.system && cashReconciliationEnabled" class="field-help">金額由現金驗算頁更新。</span></div>
-            <div class="field full"><label for="edit-liquidity">流動性</label><UiSelect id="edit-liquidity" v-model="editing.liquidity" :options="liquidityOptions" :disabled="editing.system || editing.behavior === 'liability'" /><span class="field-help">{{ liquidityHelp(editing.liquidity) }}</span></div>
-            <template v-if="editing.behavior === 'foreign'">
-              <div class="field"><label for="edit-currency">幣別</label><UiSelect id="edit-currency" v-model="editing.currency" :options="currencyOptions" /></div>
-              <div class="exchange-preview full">
-                <div><span>系統換算</span><strong>{{ foreignMoney(editing.amount, editing.currency) }} ≈ {{ twdMoney(convertedAmount(editing)) }}</strong><small>1 {{ editing.currency }} = NT$ {{ Number(editing.exchangeRate || 0).toLocaleString('zh-TW', { maximumFractionDigits: 6 }) }} · 更新：{{ fxUpdatedText }}</small></div>
-                <button class="btn btn-secondary" type="button" :disabled="fx.loading" @click="applyExchangeRate(editing, true)"><RefreshCw :class="{ spin: fx.loading }" :size="17" />更新匯率</button>
-              </div>
-            </template>
-            <AppNotice v-if="fx.error && editing.behavior === 'foreign'" class="full" tone="warning" title="匯率更新未完成">{{ fx.error }}</AppNotice>
-            <AppNotice v-if="editing.system" class="full" title="系統連動帳戶">{{ cashReconciliationEnabled ? '這個帳戶的金額由現金驗算頁更新；這裡仍可調整名稱，但不能移動、改變類型或刪除。' : '目前使用帳戶直接管理模式；可以在這裡調整名稱與金額，但不能移動、改變類型或刪除。' }}</AppNotice>
-            <div class="form-actions full"><button class="btn btn-primary" :disabled="store.saving">儲存項目變更</button></div>
-          </form>
-        </UiPanel>
-
         <UiPanel
           v-for="group in groups"
           :key="group.id"
@@ -371,17 +360,20 @@ async function dropItemOnItem(target, event) {
               </template>
             </AppNotice>
             <div v-if="itemsFor(group.id).length" class="data-list">
-              <div
+              <template
                 v-for="item in itemsFor(group.id)"
                 :key="item.id"
+              >
+              <div
                 class="data-row account-row"
                 :class="{
                   'account-row--dragging': draggingItemId === item.id,
-                  'account-row--draggable': !item.system,
+                  'account-row--draggable': !item.system && editing?.id !== item.id,
+                  'account-row--editing': editing?.id === item.id,
                   'account-row--drop-before': dragOverItemId === item.id && dragOverPlacement === 'before',
                   'account-row--drop-after': dragOverItemId === item.id && dragOverPlacement === 'after'
                 }"
-                :draggable="!item.system"
+                :draggable="!item.system && editing?.id !== item.id"
                 @dragstart="startItemDrag(item, $event)"
                 @dragend="finishItemDrag"
                 @dragover.stop="dragItemOverItem(item, $event)"
@@ -391,10 +383,31 @@ async function dropItemOnItem(target, event) {
                 <div class="data-row__main"><div class="data-row__title">{{ item.name }}</div><div class="data-row__meta">{{ behaviorLabels[item.behavior] }} · {{ item.currency }} · {{ liquidityLabels[item.liquidity] }}<template v-if="item.currency !== 'TWD'"> · {{ foreignMoney(item.amount, item.currency) }}</template></div></div>
                 <div class="data-row__value">{{ twdMoney(convertedAmount(item)) }}</div>
                 <div class="data-row__actions">
-                  <button class="btn btn-ghost btn-icon" type="button" title="編輯項目" @click="editItem(item)"><Pencil :size="17" /></button>
+                  <button class="btn btn-ghost btn-icon" type="button" title="就地編輯項目" :aria-expanded="editing?.id === item.id" :aria-controls="`account-editor-${item.id}`" @click="editItem(item)"><Pencil :size="17" /></button>
                   <button v-if="!item.system" class="btn btn-ghost btn-icon danger-action" type="button" :aria-label="`刪除 ${item.name}`" @click="pendingDeleteItemId = item.id"><Trash2 :size="17" /></button>
                 </div>
               </div>
+              <Transition name="account-editor" @after-enter="revealInlineEditor(item.id)">
+              <form v-if="editing?.id === item.id" :id="`account-editor-${item.id}`" class="form-grid inline-account-editor" @submit.prevent="saveEdit">
+                <div class="inline-editor-heading full"><div><span>正在編輯</span><strong>{{ item.name }}</strong></div><button class="btn btn-ghost" type="button" @click="editing = null">取消</button></div>
+                <div class="field"><label :for="`edit-group-${item.id}`">所屬群組</label><UiSelect :id="`edit-group-${item.id}`" v-model="editing.groupId" :options="groupOptions" :disabled="editing.system" /></div>
+                <div class="field"><label :for="`edit-name-${item.id}`">名稱</label><input :id="`edit-name-${item.id}`" v-model="editing.name" class="input" required /></div>
+                <div class="field"><label :for="`edit-behavior-${item.id}`">帳戶類型</label><div v-if="editing.system" class="locked-field">系統現金（固定）</div><UiSelect v-else :id="`edit-behavior-${item.id}`" v-model="editing.behavior" :options="editBehaviorOptions" /></div>
+                <div class="field"><label :for="`edit-amount-${item.id}`">目前金額{{ editing.behavior === 'foreign' ? `（${editing.currency}）` : '' }}</label><FormattedNumberInput :id="`edit-amount-${item.id}`" v-model="editing.amount" class="input input--amount" :min="0" :max-fraction-digits="2" :disabled="editing.system && cashReconciliationEnabled" /><span v-if="editing.system && cashReconciliationEnabled" class="field-help">金額由現金驗算頁更新。</span></div>
+                <div class="field full"><label :for="`edit-liquidity-${item.id}`">流動性</label><UiSelect :id="`edit-liquidity-${item.id}`" v-model="editing.liquidity" :options="liquidityOptions" :disabled="editing.system || editing.behavior === 'liability'" /><span class="field-help">{{ liquidityHelp(editing.liquidity) }}</span></div>
+                <template v-if="editing.behavior === 'foreign'">
+                  <div class="field"><label :for="`edit-currency-${item.id}`">幣別</label><UiSelect :id="`edit-currency-${item.id}`" v-model="editing.currency" :options="currencyOptions" /></div>
+                  <div class="exchange-preview full">
+                    <div><span>系統換算</span><strong>{{ foreignMoney(editing.amount, editing.currency) }} ≈ {{ twdMoney(convertedAmount(editing)) }}</strong><small>1 {{ editing.currency }} = NT$ {{ Number(editing.exchangeRate || 0).toLocaleString('zh-TW', { maximumFractionDigits: 6 }) }} · 更新：{{ fxUpdatedText }}</small></div>
+                    <button class="btn btn-secondary" type="button" :disabled="fx.loading" @click="applyExchangeRate(editing, true)"><RefreshCw :class="{ spin: fx.loading }" :size="17" />更新匯率</button>
+                  </div>
+                </template>
+                <AppNotice v-if="fx.error && editing.behavior === 'foreign'" class="full" tone="warning" title="匯率更新未完成">{{ fx.error }}</AppNotice>
+                <AppNotice v-if="editing.system" class="full" title="系統連動帳戶">{{ cashReconciliationEnabled ? '這個帳戶的金額由現金驗算頁更新；這裡仍可調整名稱，但不能移動、改變類型或刪除。' : '目前使用帳戶直接管理模式；可以在這裡調整名稱與金額，但不能移動、改變類型或刪除。' }}</AppNotice>
+                <div class="form-actions full"><button class="btn btn-primary" :disabled="store.saving">儲存項目變更</button></div>
+              </form>
+              </Transition>
+              </template>
             </div>
             <EmptyState v-else title="這個群組還沒有項目" description="新增帳戶，或把其他群組的帳戶拖曳到這裡。" />
           </template>
@@ -418,10 +431,18 @@ async function dropItemOnItem(target, event) {
 .account-row--draggable { cursor: grab; }
 .account-row--draggable:active { cursor: grabbing; }
 .account-row--dragging { opacity: .45; }
+.account-row--editing { border-left: 3px solid var(--primary); background: var(--primary-soft); }
 .account-row--drop-before::before, .account-row--drop-after::after { content: ""; position: absolute; z-index: 2; right: 12px; left: 12px; height: 3px; border-radius: 999px; background: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
 .account-row--drop-before::before { top: -2px; }
 .account-row--drop-after::after { bottom: -2px; }
 .account-drag-handle { display: grid; place-items: center; color: var(--muted); }
+.inline-account-editor { overflow: hidden; padding: 18px 24px 20px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--primary) 4%, var(--surface)); }
+.account-editor-enter-active, .account-editor-leave-active { max-height: 900px; transition: max-height .24s ease, opacity .18s ease, transform .2s ease, padding .24s ease; }
+.account-editor-enter-from, .account-editor-leave-to { max-height: 0; padding-top: 0; padding-bottom: 0; opacity: 0; transform: translateY(-5px); }
+.inline-editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.inline-editor-heading > div { display: grid; gap: 2px; }
+.inline-editor-heading span { color: var(--primary); font-size: .72rem; font-weight: 780; letter-spacing: .08em; text-transform: uppercase; }
+.inline-editor-heading strong { color: var(--text); font-size: .94rem; }
 .group-drop-panel { transition: border-color .16s ease, box-shadow .16s ease, background-color .16s ease; }
 .group-drop-panel--active { border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 16%, transparent); background: color-mix(in srgb, var(--primary) 4%, var(--surface)); }
 .exchange-preview { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-muted); }
@@ -441,6 +462,7 @@ async function dropItemOnItem(target, event) {
   .group-form .btn { width: 100%; }
   .account-row { grid-template-columns: 24px minmax(0, 1fr) 80px; }
   .account-row .data-row__value { grid-column: 2; text-align: left; }
+  .inline-account-editor { padding: 16px 18px 18px; }
   .group-header { align-items: flex-start; padding: 16px 18px; }
   .group-header .btn:not(.btn-icon) { font-size: 0; }
   .group-delete-notice { margin-inline: 18px; }

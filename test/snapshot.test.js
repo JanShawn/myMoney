@@ -67,10 +67,18 @@ describe('snapshot storage', () => {
 
   it('保留每個現金帳戶的驗算草稿，並正規化為 expectedAmount', () => {
     const config = normalizeConfig({
-      cashDrafts: { cash: { baseAmount: 100, rows: [{ label: '零錢', operation: 'add', amount: 25 }] } }
+      cashDrafts: { cash: { baseAmount: 100, reservedAmount: 30, rows: [
+        { label: '零錢', operation: 'add', amount: 25 },
+        { label: '代墊', operation: 'subtract', amount: -10 },
+        { label: '舊版扣除', amount: -5 }
+      ] } }
     })
     expect(config.cashDrafts).toEqual({
-      cash: { expectedAmount: 100, rows: [{ label: '零錢', operation: 'add', amount: 25 }] }
+      cash: { expectedAmount: 100, reservedAmount: 30, rows: [
+        { label: '零錢', operation: 'add', amount: 25 },
+        { label: '代墊', operation: 'subtract', amount: 10 },
+        { label: '舊版扣除', operation: 'subtract', amount: 5 }
+      ] }
     })
   })
 

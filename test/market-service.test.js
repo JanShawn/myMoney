@@ -2,11 +2,19 @@ import { afterAll, describe, expect, it, vi } from 'vitest'
 import { fetchMarketPreview, fetchStockBuyListQuotes, lookupMarketInstrument, lookupMarketInstrumentName } from '../app/services/market-service.js'
 
 describe('market instrument lookup', () => {
-  it('用代號帶回官方名稱與收盤價', async () => {
+  it('用代號從 Yahoo Finance 帶回名稱與行情價', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url) => {
       const value = String(url)
-      if (value.includes('finmindtrade')) return { ok: true, json: async () => ({ status: 200, data: [{ date: '2026-08-28', stock_id: '0050', close: 199 }] }) }
-      return { ok: true, json: async () => value.includes('twse') ? [{ Code: '0050', Name: '元大台灣50', ClosingPrice: '198.50' }] : [] }
+      if (value.includes('market-instruments.json')) {
+        return { ok: true, json: async () => ({ instruments: [{ ticker: '0050', market: 'TWSE' }] }) }
+      }
+      if (value.startsWith('/api/stock-quotes')) {
+        return { ok: true, json: async () => ({
+          quotes: { '0050': { ticker: '0050', name: '元大台灣50', market: 'TWSE', currentPrice: 199, marketDate: '2026-09-10', source: 'Yahoo Finance 盤中行情' } },
+          warnings: []
+        }) }
+      }
+      return { ok: true, json: async () => [] }
     }))
 
     await expect(lookupMarketInstrument('0050')).resolves.toMatchObject({
@@ -14,7 +22,8 @@ describe('market instrument lookup', () => {
       name: '元大台灣50',
       price: 199,
       market: 'TWSE',
-      marketDate: '2026-08-28',
+      marketDate: '2026-09-10',
+      source: 'Yahoo Finance 盤中行情',
       fallback: false
     })
     await expect(lookupMarketInstrumentName('0050')).resolves.toEqual({
@@ -27,6 +36,12 @@ describe('market instrument lookup', () => {
   it('優先使用證交所最新交易日大盤，240MA 沿用可用歷史資料', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url) => {
       const value = String(url)
+      if (value.startsWith('/api/stock-quotes')) {
+        return { ok: true, json: async () => ({
+          quotes: { '0050': { currentPrice: 201, marketDate: '2026-09-02', source: 'Yahoo Finance 盤中行情' } },
+          warnings: []
+        }) }
+      }
       if (value.includes('market-summary.json')) {
         return { ok: true, json: async () => ({ taiex: 46331.45, ma240: 35042.84, asOfDate: '2026-08-28' }) }
       }
@@ -38,14 +53,16 @@ describe('market instrument lookup', () => {
     }))
 
     await expect(fetchMarketPreview(['0050'])).resolves.toMatchObject({
-      prices: { '0050': 199 },
-      priceDates: { '0050': '2026-08-28' },
+      prices: { '0050': 201 },
+      priceDates: { '0050': '2026-09-02' },
+      priceSources: { '0050': 'Yahoo Finance 盤中行情' },
       taiex: 46164.72,
       ma240: 35042.84,
       asOfDate: '2026-09-02',
       warnings: []
     })
     expect(fetch).not.toHaveBeenCalledWith(expect.stringContaining('MI_INDEX'), expect.anything())
+    expect(fetch).not.toHaveBeenCalledWith(expect.stringContaining('finmindtrade'), expect.anything())
   })
 
   it('待買清單行情包含開盤價、最新價與行情日期', async () => {

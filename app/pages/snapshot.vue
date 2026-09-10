@@ -126,7 +126,7 @@ async function save() {
             </div>
             <div class="asset-part">
               <span class="asset-part__operator" aria-hidden="true"></span>
-              <span class="asset-part__label">可動用現金<small>含外幣換算</small></span>
+              <span class="asset-part__label">可動用現金<small>含外幣換算<span v-if="store.summary?.reservedCash">；已扣待扣款 {{ money(store.summary.reservedCash) }}</span></small></span>
               <strong>{{ money(store.summary?.availableCash) }}</strong>
             </div>
             <div class="asset-part">

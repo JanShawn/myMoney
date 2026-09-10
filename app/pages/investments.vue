@@ -1,6 +1,7 @@
 <script setup>
-import { CheckCircle2, ExternalLink, Pencil, RefreshCw, Search, Trash2 } from '@lucide/vue'
+import { CheckCircle2, ExternalLink, LayoutGrid, List, Pencil, RefreshCw, Search, Trash2 } from '@lucide/vue'
 import { yahooQuoteUrl } from '~/services/market-service'
+import { defaultHoldingLeverage } from '~/services/money-domain'
 import { useMoneyStore } from '~/stores/money'
 
 const store = useMoneyStore()
@@ -12,6 +13,7 @@ const quantityInput = ref(null)
 const expandedHoldingId = ref('')
 const holdingQuery = ref('')
 const holdingSort = ref('ticker')
+const compactMode = ref(false)
 const marketResult = ref(null)
 const marketUpdating = ref(false)
 const resolvedTicker = ref('')
@@ -20,6 +22,7 @@ const quantityDrafts = reactive({})
 const priceDrafts = reactive({})
 const leverageDrafts = reactive({})
 const lookup = reactive({ loading: false, status: 'idle', message: '', source: '', yahooUrl: '' })
+const leverageWasEdited = ref(false)
 let lookupRequestId = 0
 const classLabels = { equity: '股票', bond: '債券' }
 const classOptions = Object.entries(classLabels).map(([value, label]) => ({ value, label }))
@@ -38,6 +41,7 @@ const holdingTotalExposure = computed(() => store.activeHoldings.reduce((sum, ho
 const latestClosingDate = computed(() => store.activeHoldings.map((holding) => holding.priceAsOfDate).filter(Boolean).sort().at(-1) || '')
 const pendingDeleteHolding = computed(() => store.activeHoldings.find((holding) => holding.id === pendingDeleteHoldingId.value) || null)
 const sortLabels = { ticker: '代號', quantity: '股數', marketValue: '市值' }
+const HOLDING_VIEW_PREFERENCE_KEY = 'mymoney:holding-view'
 const holdingYahooUrl = (holding) => yahooQuoteUrl(holding.ticker, holding.market)
 const formYahooUrl = computed(() => yahooQuoteUrl(form.ticker, form.market) || lookup.yahooUrl)
 const displayedHoldings = computed(() => {
@@ -55,6 +59,9 @@ const displayedHoldings = computed(() => {
 })
 const holdingListDescription = computed(() => `${holdingQuery.value.trim() ? `${displayedHoldings.value.length} / ` : ''}${store.activeHoldings.length} 筆使用中持倉 · 依${sortLabels[holdingSort.value]}${holdingSort.value === 'ticker' ? '由小到大' : '由高到低'}排列`)
 const holdingClassLabel = (holding) => classLabels[holding.assetClass] || classLabels.equity
+watch(() => form.assetClass, () => {
+  if (!leverageWasEdited.value) form.leverage = defaultHoldingLeverage(form)
+})
 watch(() => form.ticker, () => {
   if (normalizedTicker.value === resolvedTicker.value) return
   lookupRequestId += 1
@@ -68,6 +75,20 @@ watch(() => form.ticker, () => {
   form.yahooUrl = ''
   Object.assign(lookup, { status: 'idle', message: '', source: '', yahooUrl: '' })
 })
+onMounted(() => {
+  try {
+    compactMode.value = localStorage.getItem(HOLDING_VIEW_PREFERENCE_KEY) === 'compact'
+  } catch {
+    // 瀏覽器停用儲存時仍可在本次頁面切換模式。
+  }
+})
+watch(compactMode, (compact) => {
+  try {
+    localStorage.setItem(HOLDING_VIEW_PREFERENCE_KEY, compact ? 'compact' : 'comfortable')
+  } catch {
+    // 顯示偏好保存失敗不影響持倉操作。
+  }
+})
 
 function toggleHoldingEdit(holdingId) {
   pendingDeleteHoldingId.value = ''
@@ -79,6 +100,13 @@ function handleHoldingRowClick(holdingId, event) {
   toggleHoldingEdit(holdingId)
 }
 
+function revealHoldingEditor(holdingId) {
+  const editor = document.getElementById(`holding-editor-${holdingId}`)
+  const quantityInput = document.getElementById(`quantity-${holdingId}`)
+  quantityInput?.focus({ preventScroll: true })
+  editor?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+}
+
 async function lookupTicker() {
   const requestId = ++lookupRequestId
   if (!normalizedTicker.value) {
@@ -86,7 +114,7 @@ async function lookupTicker() {
     return false
   }
   lookup.loading = true
-  Object.assign(lookup, { status: 'loading', message: '正在查詢商品與最新收盤價…', source: '', yahooUrl: '' })
+  Object.assign(lookup, { status: 'loading', message: '正在從 Yahoo Finance 查詢商品與最新行情…', source: '', yahooUrl: '' })
   try {
     const instrument = await store.lookupHolding(normalizedTicker.value)
     if (requestId !== lookupRequestId) return false
@@ -94,12 +122,13 @@ async function lookupTicker() {
     form.ticker = instrument.ticker
     form.name = instrument.name
     form.market = instrument.market
+    if (!leverageWasEdited.value) form.leverage = defaultHoldingLeverage(form)
     form.price = instrument.price
     form.priceSource = 'auto'
     form.priceAsOfDate = instrument.marketDate
     form.priceSourceLabel = instrument.source
     form.yahooUrl = instrument.yahooUrl
-    Object.assign(lookup, { status: 'success', message: instrument.fallback ? '最新日行情暫時無法取得，目前使用官方快取價格。' : '已自動帶入商品名稱與最新收盤價。', source: instrument.source, yahooUrl: instrument.yahooUrl })
+    Object.assign(lookup, { status: 'success', message: '已從 Yahoo Finance 帶入商品名稱與最新行情價。', source: instrument.source, yahooUrl: instrument.yahooUrl })
     return true
   } catch (error) {
     if (requestId !== lookupRequestId) return false
@@ -133,6 +162,7 @@ async function lookupTickerAndFocusQuantity() {
 function resetForm() {
   lookupRequestId += 1
   Object.assign(form, defaultForm())
+  leverageWasEdited.value = false
   resolvedTicker.value = ''
   Object.assign(lookup, { loading: false, status: 'idle', message: '', source: '', yahooUrl: '' })
 }
@@ -196,17 +226,17 @@ async function refreshMarket() {
     showToast({
       tone: partial ? 'warning' : 'success',
       title: updatedCount
-        ? partial ? '收盤價已部分更新' : '所有收盤價已更新'
-        : '沒有可更新的收盤價',
+        ? partial ? '行情價已部分更新' : '所有行情價已更新'
+        : '沒有可更新的行情價',
       message: updatedCount
-        ? `已取得並保存 ${updatedCount}/${total} 筆持倉的收盤價${latestDate ? `，最新收盤日 ${latestDate}` : ''}。`
-        : '這次沒有取得可用的新收盤價，原本價格已保留。'
+        ? `已從 Yahoo Finance 取得並保存 ${updatedCount}/${total} 筆持倉行情${latestDate ? `，最新行情日 ${latestDate}` : ''}。`
+        : '這次沒有取得可用的新行情價，原本價格已保留。'
     })
   } catch (error) {
     store.error = ''
     showToast({
       tone: 'error',
-      title: '收盤價更新失敗',
+      title: '行情價更新失敗',
       message: error?.message || '目前無法取得市場資料，原本價格已保留。'
     })
   } finally {
@@ -293,7 +323,7 @@ async function confirmDeleteHolding(holding) {
 <template>
   <div>
     <PageHeader eyebrow="Investment holdings" title="投資持倉" description="集中管理商品數量與價格；券商帳戶裡尚未投資的現金，請留在帳戶結構。">
-      <template #actions><button class="btn btn-secondary" :disabled="marketUpdating || store.saving || !store.activeHoldings.length" @click="refreshMarket"><RefreshCw :class="{ spin: marketUpdating }" :size="18" />{{ marketUpdating ? '更新中…' : '更新收盤價' }}</button></template>
+      <template #actions><button class="btn btn-secondary" :disabled="marketUpdating || store.saving || !store.activeHoldings.length" @click="refreshMarket"><RefreshCw :class="{ spin: marketUpdating }" :size="18" />{{ marketUpdating ? '更新中…' : '更新行情價' }}</button></template>
     </PageHeader>
     <div class="investment-workspace">
       <UiPanel class="add-holding-panel" title="新增持倉" description="輸入商品代號後，名稱與價格會自動帶入。">
@@ -313,7 +343,7 @@ async function confirmDeleteHolding(holding) {
 
           <div v-if="lookup.status === 'success'" class="instrument-result" aria-live="polite">
             <CheckCircle2 :size="20" />
-            <div><strong>{{ form.ticker }} · {{ form.name }}</strong><span>最近收盤價 {{ priceMoney(form.price) }} · {{ lookup.source }} <a v-if="formYahooUrl" :href="formYahooUrl" target="_blank" rel="noreferrer">Yahoo 股市核對</a></span></div>
+            <div><strong>{{ form.ticker }} · {{ form.name }}</strong><span>最新行情價 {{ priceMoney(form.price) }} · {{ lookup.source }} <a v-if="formYahooUrl" :href="formYahooUrl" target="_blank" rel="noreferrer">Yahoo Finance 查看</a></span></div>
           </div>
 
           <AppNotice v-else-if="lookup.status === 'error'" tone="warning" title="無法取得商品資料">{{ lookup.message }}</AppNotice>
@@ -325,7 +355,7 @@ async function confirmDeleteHolding(holding) {
           <div class="holding-options">
             <div class="holding-options__title"><span>商品槓桿比例</span><small>負數反向 · 0 零曝險 · 正數正向</small></div>
             <div class="holding-options__body">
-              <div class="field"><label for="leverage">槓桿倍數（整數）</label><input id="leverage" v-model.number="form.leverage" class="input input--amount" type="number" step="1" required /><span class="field-help">預設 1×。負數代表反向曝險，0 代表不產生市場曝險；所有持倉固定納入資產。</span></div>
+              <div class="field"><label for="leverage">槓桿倍數（整數）</label><input id="leverage" v-model.number="form.leverage" class="input input--amount" type="number" step="1" required @input="leverageWasEdited = true" /><span class="field-help">預設：債券 0×、名稱含「正2」的商品 2×，其他商品 1×；仍可手動調整。</span></div>
             </div>
           </div>
 
@@ -342,15 +372,19 @@ async function confirmDeleteHolding(holding) {
             <span>排序</span>
             <button v-for="(label, value) in sortLabels" :key="value" type="button" :class="{ active: holdingSort === value }" :aria-pressed="holdingSort === value" @click="holdingSort = value">{{ label }}</button>
           </div>
+          <div class="holding-view-switch" role="group" aria-label="持倉顯示密度">
+            <button type="button" :class="{ active: !compactMode }" :aria-pressed="!compactMode" @click="compactMode = false"><LayoutGrid :size="15" aria-hidden="true" />完整</button>
+            <button type="button" :class="{ active: compactMode }" :aria-pressed="compactMode" @click="compactMode = true"><List :size="15" aria-hidden="true" />精簡</button>
+          </div>
           <span class="holding-result-count">{{ displayedHoldings.length }} 筆</span>
         </div>
-        <div v-if="displayedHoldings.length" class="holding-card-grid">
-          <article v-for="holding in displayedHoldings" :key="holding.id" class="holding-card" @click="handleHoldingRowClick(holding.id, $event)">
+        <div v-if="displayedHoldings.length" class="holding-card-grid" :class="{ 'holding-card-grid--compact': compactMode }">
+          <article v-for="holding in displayedHoldings" :key="holding.id" class="holding-card" :class="{ 'holding-card--compact': compactMode, 'holding-card--expanded': expandedHoldingId === holding.id }" @click="handleHoldingRowClick(holding.id, $event)">
             <div class="holding-card__header">
               <div class="holding-identity">
-                <div class="holding-code-line"><span class="holding-code">{{ holding.ticker }}</span><span class="holding-price-source">{{ holding.priceSource === 'auto' ? '自動價格' : '手動價格' }}</span></div>
+                <div class="holding-code-line"><span class="holding-code">{{ holding.ticker }}</span><span v-if="!compactMode" class="holding-price-source">{{ holding.priceSource === 'auto' ? '自動價格' : '手動價格' }}</span></div>
                 <h3 class="holding-name">{{ holding.name }}</h3>
-                <div class="holding-meta">{{ holdingClassLabel(holding) }}</div>
+                <div v-if="!compactMode" class="holding-meta">{{ holdingClassLabel(holding) }}</div>
               </div>
               <div class="data-row__actions">
                 <a v-if="holdingYahooUrl(holding)" class="btn btn-ghost btn-icon quote-action" :href="holdingYahooUrl(holding)" target="_blank" rel="noreferrer" :aria-label="`前往 Yahoo 股市核對 ${holding.name} 價格`" title="前往 Yahoo 股市核對價格"><ExternalLink :size="16" aria-hidden="true" /></a>
@@ -358,13 +392,15 @@ async function confirmDeleteHolding(holding) {
                 <button class="btn btn-ghost btn-icon delete-action" type="button" :aria-label="`刪除 ${holding.name}`" @click="requestDeleteHolding(holding.id)"><Trash2 :size="17" /></button>
               </div>
             </div>
-            <div class="holding-market-value"><span>目前市值</span><strong>{{ money(holdingValue(holding)) }}</strong></div>
-            <div class="holding-summary-values">
+            <div v-if="compactMode" class="holding-compact-summary"><span>{{ quantityText(displayQuantity(holding)) }} 股 · {{ priceMoney(displayPrice(holding)) }}</span><strong>市值 {{ money(holdingValue(holding)) }}</strong></div>
+            <div v-else class="holding-market-value"><span>目前市值</span><strong>{{ money(holdingValue(holding)) }}</strong></div>
+            <div v-if="!compactMode" class="holding-summary-values">
               <div><span>持有股數</span><strong>{{ quantityText(displayQuantity(holding)) }} 股</strong></div>
               <div><span>目前價格</span><strong>{{ priceMoney(displayPrice(holding)) }}</strong></div>
               <div><span>槓桿倍數</span><strong>{{ quantityText(displayLeverage(holding)) }}×</strong></div>
               <div><span>淨曝險值</span><strong>{{ money(holdingExposureValue(holding)) }}</strong></div>
             </div>
+            <Transition name="holding-editor" @after-enter="revealHoldingEditor(holding.id)">
             <div v-if="expandedHoldingId === holding.id" :id="`holding-editor-${holding.id}`" class="holding-edit-fields">
               <div class="holding-compact-field">
                 <label :for="`quantity-${holding.id}`">目前持有股數</label>
@@ -378,8 +414,9 @@ async function confirmDeleteHolding(holding) {
                 <label :for="`leverage-${holding.id}`">商品槓桿倍數</label>
                 <input :id="`leverage-${holding.id}`" class="input input--amount" type="number" step="1" :value="displayLeverage(holding)" @input="leverageDrafts[holding.id] = $event.target.value" @change="saveLeverage(holding, $event.target.value)" />
               </div>
-              <div class="holding-editor-status"><span>離開欄位後自動保存；再按一次鉛筆可收合。</span></div>
+              <div class="holding-editor-status"><span>{{ compactMode ? '離開欄位即保存' : '離開欄位後自動保存；再按一次鉛筆可收合。' }}</span></div>
             </div>
+            </Transition>
           </article>
         </div>
         <EmptyState v-else-if="!store.activeHoldings.length" title="還沒有投資持倉" description="使用左側新增區建立第一筆資料。" />
@@ -417,10 +454,33 @@ async function confirmDeleteHolding(holding) {
 .holding-sort button { min-height: 29px; padding: 3px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; font: inherit; font-size: .75rem; font-weight: 700; }
 .holding-sort button:hover { color: var(--text); }
 .holding-sort button.active { background: var(--surface); color: var(--primary); box-shadow: var(--shadow-xs); }
+.holding-view-switch { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 2px; padding: 3px; border-radius: 10px; background: var(--surface-muted); }
+.holding-view-switch button { min-height: 29px; display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; font: inherit; font-size: .75rem; font-weight: 700; }
+.holding-view-switch button:hover { color: var(--text); }
+.holding-view-switch button.active { background: var(--surface); color: var(--primary); box-shadow: var(--shadow-xs); }
 .holding-result-count { flex: 0 0 auto; color: var(--muted); font-size: .76rem; font-weight: 700; }
 .holding-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 10px; padding: 0 12px 12px; }
 .holding-card { display: grid; align-content: start; gap: 11px; min-width: 0; padding: 13px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); cursor: pointer; transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease; }
 .holding-card:hover { border-color: color-mix(in srgb, var(--primary) 28%, var(--border)); box-shadow: var(--shadow-xs); transform: translateY(-1px); }
+.holding-card-grid--compact { grid-template-columns: repeat(auto-fill, minmax(185px, 1fr)); gap: 6px; }
+.holding-card--compact { position: relative; display: block; min-height: 86px; padding: 9px 10px; }
+.holding-card--compact.holding-card--expanded { grid-column: span 2; }
+.holding-card--compact .holding-card__header { display: block; }
+.holding-card--compact .holding-code-line { padding-right: 78px; }
+.holding-card--compact .holding-name { display: block; overflow: hidden; margin-top: 2px; font-size: .82rem; text-overflow: ellipsis; white-space: nowrap; }
+.holding-card--compact .holding-card__header > .data-row__actions { position: absolute; top: 5px; right: 5px; gap: 0; opacity: 0; transition: opacity .14s ease; }
+.holding-card--compact:hover .holding-card__header > .data-row__actions, .holding-card--compact:focus-within .holding-card__header > .data-row__actions, .holding-card--compact.holding-card--expanded .holding-card__header > .data-row__actions { opacity: 1; }
+.holding-card--compact .data-row__actions .btn-icon { width: 26px; min-height: 28px; padding: 4px; }
+.holding-compact-summary { display: grid; gap: 1px; min-width: 0; margin-top: 7px; padding-top: 6px; border-top: 1px solid var(--border); }
+.holding-compact-summary span, .holding-compact-summary strong { max-width: 100%; overflow: hidden; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+.holding-compact-summary span { color: var(--muted); font-size: .69rem; }
+.holding-compact-summary strong { color: var(--text); font-size: .78rem; }
+.holding-card--compact .holding-edit-fields { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-top: 8px; padding: 8px; }
+.holding-card--compact .holding-edit-fields label { overflow: hidden; font-size: .69rem; text-overflow: ellipsis; white-space: nowrap; }
+.holding-card--compact .holding-edit-fields .input { min-height: 36px; padding: 6px 7px; font-size: .78rem; }
+.holding-card--compact .holding-editor-status { min-height: 18px; }
+.holding-card--compact .holding-editor-status span { font-size: .69rem; }
+@media (hover: none) { .holding-card--compact .holding-card__header > .data-row__actions { opacity: 1; } }
 .holding-card__header { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 8px; }
 .holding-card .data-row__actions { display: flex; gap: 2px; }
 .holding-identity { min-width: 0; }
@@ -439,7 +499,9 @@ async function confirmDeleteHolding(holding) {
 .quote-action { color: var(--primary); }
 .delete-action { color: var(--danger); }
 .confirm-actions { display: flex; gap: 8px; }
-.holding-edit-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: 8px; padding: 10px; border-radius: var(--radius-md); background: var(--surface-muted); }
+.holding-edit-fields { display: grid; overflow: hidden; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: 8px; padding: 10px; border-radius: var(--radius-md); background: var(--surface-muted); }
+.holding-editor-enter-active, .holding-editor-leave-active { max-height: 260px; transition: max-height .22s ease, opacity .16s ease, transform .18s ease, padding .22s ease; }
+.holding-editor-enter-from, .holding-editor-leave-to { max-height: 0; padding-top: 0; padding-bottom: 0; opacity: 0; transform: translateY(-4px); }
 .holding-compact-field { display: grid; gap: 4px; min-width: 0; }
 .holding-edit-fields label { color: var(--muted); font-size: .75rem; font-weight: 700; }
 .holding-edit-fields .input { min-height: 40px; padding-block: 7px; }
@@ -468,7 +530,13 @@ async function confirmDeleteHolding(holding) {
   .holding-search { flex-basis: 100%; }
   .holding-sort { flex: 1 1 auto; }
   .holding-sort button { flex: 1; }
+  .holding-view-switch { flex: 1 1 auto; }
+  .holding-view-switch button { flex: 1; justify-content: center; }
   .holding-card-grid { grid-template-columns: 1fr; padding: 0 10px 10px; }
+  .holding-card-grid--compact { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  .holding-card--compact.holding-card--expanded { grid-column: span 2; }
+  .holding-card--compact .holding-code-line { padding-right: 74px; }
+  .holding-card--compact .holding-edit-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .confirm-actions { flex-direction: column; }
 }
 </style>

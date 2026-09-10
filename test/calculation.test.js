@@ -1,7 +1,28 @@
 import { describe, expect, it } from 'vitest'
-import { calculateSummary, normalizeConfig } from '../app/services/money-domain.js'
+import { calculateSummary, defaultHoldingLeverage, normalizeConfig } from '../app/services/money-domain.js'
 
 describe('calculateSummary', () => {
+  it('依商品類型提供預設槓桿', () => {
+    expect(defaultHoldingLeverage({ assetClass: 'bond', name: '中信美國公債20年' })).toBe(0)
+    expect(defaultHoldingLeverage({ assetClass: 'equity', name: '元大台灣50正2' })).toBe(2)
+    expect(defaultHoldingLeverage({ assetClass: 'bond', name: '元大美債20正2' })).toBe(2)
+    expect(defaultHoldingLeverage({ assetClass: 'equity', name: '元大台灣50' })).toBe(1)
+  })
+
+  it('舊資料沒有明確槓桿時套用商品預設值', () => {
+    const config = normalizeConfig({
+      version: 3,
+      groups: [],
+      items: [],
+      holdings: [
+        { id: 'bond', name: '中信美國公債20年', assetClass: 'bond', multiplier: 1 },
+        { id: 'leveraged', name: '元大台灣50正2', assetClass: 'equity', multiplier: 1 }
+      ]
+    })
+
+    expect(config.holdings.map((holding) => holding.leverage)).toEqual([0, 2])
+  })
+
   it('分開計算資產、負債、流動性與投資類別', () => {
     const summary = calculateSummary({
       items: [
@@ -31,6 +52,25 @@ describe('calculateSummary', () => {
     expect(summary.totalCash).toBe(10000)
     expect(summary.totalForeign).toBe(3200)
     expect(summary.totalOther).toBe(0)
+  })
+
+  it('待扣款只降低可動用金額，不改變總資產與淨資產', () => {
+    const summary = calculateSummary({
+      settings: { cashReconciliationEnabled: true },
+      cashDrafts: { 'item-cash': { reservedAmount: 3000 } },
+      items: [
+        { amount: 10000, exchangeRate: 1, currency: 'TWD', assetClass: 'cash', liquidity: 'available', includeInAssets: true, archived: false },
+        { amount: 2000, exchangeRate: 1, currency: 'TWD', assetClass: 'cash', liquidity: 'locked', includeInAssets: true, archived: false }
+      ],
+      holdings: []
+    })
+
+    expect(summary.totalAssets).toBe(12000)
+    expect(summary.netWorth).toBe(12000)
+    expect(summary.reservedCash).toBe(3000)
+    expect(summary.availableCash).toBe(7000)
+    expect(summary.availableAssets).toBe(7000)
+    expect(summary.restrictedCash).toBe(5000)
   })
 
   it('替舊版持倉補上可保存的顯示順序', () => {

@@ -36,7 +36,7 @@ function hasUserData(input) {
     || data.stockBuyList.length > 0
     || data.snapshots.length > 0
     || data.items.some((item) => item.system && Number(item.amount) !== 0)
-    || cashDrafts.some((draft) => Number(draft.expectedAmount) !== 0 || draft.rows?.some((row) => row.label || Number(row.amount) !== 0))
+    || cashDrafts.some((draft) => Number(draft.expectedAmount) !== 0 || Number(draft.reservedAmount) !== 0 || draft.rows?.some((row) => row.label || Number(row.amount) !== 0))
 }
 
 function configSummary(input) {

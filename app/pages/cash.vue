@@ -6,6 +6,7 @@ import { SYSTEM_CASH_ITEM_ID } from '~/services/money-domain'
 const store = useMoneyStore()
 const { showToast } = useToast()
 const expectedAmount = ref(0)
+const reservedAmount = ref(0)
 const createRow = (operation = 'add', amount = '') => ({ id: crypto.randomUUID(), label: '', operation, amount })
 const rows = ref([createRow()])
 const cashReconciliationEnabled = computed(() => store.config?.settings?.cashReconciliationEnabled !== false)
@@ -20,6 +21,11 @@ const formatIntegerInput = (value) => value === '' || value == null
   : new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(Number(value) || 0)
 const actualAmount = computed(() => rows.value.reduce((sum, row) => sum + signedAmount(row), 0))
 const difference = computed(() => actualAmount.value - Number(expectedAmount.value || 0))
+const availableCashBeforeReserve = computed(() => store.activeItems
+  .filter((item) => ['cash', 'foreign'].includes(item.assetClass) && item.liquidity !== 'locked')
+  .reduce((sum, item) => sum + Number(item.amount || 0) * (item.currency === 'TWD' ? 1 : Number(item.exchangeRate || 0)), 0))
+const availableCashAfterReserve = computed(() => Math.max(0, availableCashBeforeReserve.value - Number(reservedAmount.value || 0)))
+const reserveExceedsAvailableCash = computed(() => Number(reservedAmount.value || 0) > availableCashBeforeReserve.value)
 const hasDetails = computed(() => rows.value.some((row) => Number(row.amount) > 0))
 const currentAmountChanged = computed(() => Number(expectedAmount.value || 0) !== Number(selected.value?.amount || 0))
 const comparisonState = computed(() => {
@@ -54,6 +60,7 @@ function hydrateDraft(accountId) {
   const draft = store.config.cashDrafts?.[accountId]
   hydratingDraft.value = true
   expectedAmount.value = Math.max(0, Number(draft?.expectedAmount ?? draft?.baseAmount ?? item.amount ?? 0))
+  reservedAmount.value = Math.max(0, Number(draft?.reservedAmount || 0))
   rows.value = draft?.rows?.length
     ? draft.rows.map((row) => ({
         id: crypto.randomUUID(),
@@ -65,7 +72,7 @@ function hydrateDraft(accountId) {
   nextTick(() => { hydratingDraft.value = false })
 }
 
-watch([expectedAmount, rows], () => {
+watch([expectedAmount, reservedAmount, rows], () => {
   if (hydratingDraft.value || !selectedId.value) return
   clearTimeout(draftTimer)
   draftTimer = setTimeout(() => persistDraft(), 350)
@@ -86,6 +93,12 @@ function updateExpectedAmount(event) {
   expectedAmount.value = Number(sanitized || 0)
   event.target.value = formatIntegerInput(expectedAmount.value)
 }
+function updateReservedAmount(event) {
+  const raw = event.target.value
+  const sanitized = raw.includes('-') ? '0' : raw.split('.')[0].replace(/\D/g, '')
+  reservedAmount.value = Number(sanitized || 0)
+  event.target.value = formatIntegerInput(reservedAmount.value)
+}
 function updateAdjustment(row, event) {
   const raw = event.target.value
   const sanitized = raw.split('.')[0].replace(/\D/g, '')
@@ -96,7 +109,17 @@ function focusCashInput(id) {
   nextTick(() => document.getElementById(id)?.focus())
 }
 function moveFromExpectedAmount(event) {
-  if (event.shiftKey || !rows.value.length) return
+  if (event.shiftKey) return
+  event.preventDefault()
+  focusCashInput('cash-reserved')
+}
+function moveFromReservedAmount(event) {
+  if (event.shiftKey) {
+    event.preventDefault()
+    focusCashInput('cash-expected')
+    return
+  }
+  if (!rows.value.length) return
   event.preventDefault()
   focusCashInput(`cash-value-${rows.value[0].id}`)
 }
@@ -114,7 +137,12 @@ function moveBetweenAdjustmentAmounts(index, event) {
 function draftPayload() {
   return {
     expectedAmount: Number(expectedAmount.value || 0),
-    rows: rows.value.map((row) => ({ label: row.label, operation: row.operation, amount: signedAmount(row) }))
+    reservedAmount: Number(reservedAmount.value || 0),
+    rows: rows.value.map((row) => ({
+      label: row.label,
+      operation: row.operation,
+      amount: Math.abs(Number(row.amount || 0))
+    }))
   }
 }
 async function persistDraft(accountId = selectedId.value) {
@@ -195,6 +223,11 @@ const money = (value) => new Intl.NumberFormat('zh-TW', { style: 'currency', cur
             <div><span class="baseline-card__eyebrow">對帳基準</span><label for="cash-expected">目前現金總金額</label><small>預設帶入「身上現金」目前的帳面金額，可直接修改。</small></div>
             <input id="cash-expected" :value="formatIntegerInput(expectedAmount)" class="input input--amount baseline-card__input" type="text" inputmode="numeric" pattern="[0-9,]*" @input="updateExpectedAmount" @keydown.tab="moveFromExpectedAmount" />
           </div>
+          <div class="reservation-card">
+            <div><span class="baseline-card__eyebrow">Available cash adjustment</span><label for="cash-reserved">待扣款／保留款</label><small>例如股票 T+2 交割款。只降低可動用現金，不參與下方驗算，也不改變總資產與淨資產；交割完成後請清為 0。</small></div>
+            <input id="cash-reserved" :value="formatIntegerInput(reservedAmount)" class="input input--amount baseline-card__input" type="text" inputmode="numeric" pattern="[0-9,]*" placeholder="0" @input="updateReservedAmount" @keydown.tab="moveFromReservedAmount" />
+          </div>
+          <AppNotice v-if="reserveExceedsAvailableCash" tone="warning" title="待扣款超過目前可動用現金">扣除後可動用現金會以 0 顯示；請確認交割帳戶是否還有其他尚未登錄的餘額。</AppNotice>
           <div class="detail-heading"><div><h3>實際現金明細</h3><p>逐項加入實際持有的現金；需要扣除代墊或支出時切換為「扣除」。</p></div></div>
           <div v-for="(row, index) in rows" :key="row.id" class="adjustment-row" :class="`adjustment-row--${row.operation}`">
             <div class="field"><label :for="`cash-label-${row.id}`">項目 {{ index + 1 }}</label><input :id="`cash-label-${row.id}`" v-model="row.label" class="input" placeholder="例如：錢包零錢、代墊款" /></div>
@@ -225,6 +258,8 @@ const money = (value) => new Intl.NumberFormat('zh-TW', { style: 'currency', cur
         <div class="comparison-summary">
           <div class="summary-item"><span class="summary-item__label">目前現金總額</span><strong class="summary-item__value">{{ money(expectedAmount) }}</strong></div>
           <div v-if="hasDetails" class="summary-item"><span class="summary-item__label">實際明細合計</span><strong class="summary-item__value">{{ money(actualAmount) }}</strong></div>
+          <div class="summary-item"><span class="summary-item__label">待扣款／保留款</span><strong class="summary-item__value negative">{{ money(reservedAmount) }}</strong></div>
+          <div class="summary-item summary-item--primary"><span class="summary-item__label">扣除後可動用現金</span><strong class="summary-item__value">{{ money(availableCashAfterReserve) }}</strong></div>
         </div>
         <div class="comparison-result" :class="`comparison-result--${comparisonState.tone}`" role="status" aria-live="polite">
           <span>{{ hasDetails ? '驗算差額' : '目前採用金額' }}</span>
@@ -254,6 +289,10 @@ const money = (value) => new Intl.NumberFormat('zh-TW', { style: 'currency', cur
 .reconciled-time span { color: var(--muted); font-size: .76rem; }
 .reconciled-time strong { color: var(--text); font-size: .8rem; line-height: 1.4; }
 .baseline-card { display: grid; grid-template-columns: minmax(0, 1fr) minmax(160px, .52fr); align-items: center; gap: 22px; padding: 18px; border: 1px solid var(--notice-border); border-radius: var(--radius-md); background: linear-gradient(135deg, var(--notice-bg), var(--surface-hover)); }
+.reservation-card { display: grid; grid-template-columns: minmax(0, 1fr) minmax(160px, .52fr); align-items: center; gap: 22px; padding: 18px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-muted); }
+.reservation-card > div { display: grid; gap: 4px; }
+.reservation-card label { color: var(--text); font-size: .94rem; font-weight: 750; }
+.reservation-card small { color: var(--muted); font-size: .78rem; line-height: 1.5; }
 .baseline-card > div { display: grid; gap: 4px; }
 .baseline-card__eyebrow { color: var(--primary); font-size: .75rem; font-weight: 780; letter-spacing: .09em; text-transform: uppercase; }
 .baseline-card label { color: var(--text); font-size: .94rem; font-weight: 750; }
@@ -277,7 +316,7 @@ const money = (value) => new Intl.NumberFormat('zh-TW', { style: 'currency', cur
 .apply-button { margin-top: 18px; }
 @media (max-width: 880px) { .result-panel { position: static; } }
 @media (max-width: 620px) {
-  .baseline-card { grid-template-columns: 1fr; }
+  .baseline-card, .reservation-card { grid-template-columns: 1fr; }
   .adjustment-row { grid-template-columns: minmax(0, 1fr); }
   .adjustment-row > .field { grid-column: 1 / -1; }
   .adjustment-actions { grid-column: 1 / -1; justify-content: flex-end; margin: 0; }

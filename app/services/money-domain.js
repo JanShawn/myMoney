@@ -40,6 +40,7 @@ const LEGACY_DEFAULT_GROUP_ORDERS_WITHOUT_CASH = {
 }
 const SNAPSHOT_NUMBER_KEYS = [
   'totalAssets', 'totalLiabilities', 'netWorth', 'availableCash', 'availableAssets',
+  'reservedCash',
   'totalStocks', 'stockRatio', 'totalBonds', 'bondRatio', 'totalCash', 'totalForeign',
   'totalOther', 'restrictedCash', 'totalStockExposure', 'totalBondExposure', 'totalInvestmentExposure',
   'taiex', 'ma240'
@@ -134,11 +135,15 @@ function normalizeGroup(input = {}, fallbackOrder = 0) {
 function normalizeCashDraft(input = {}) {
   return {
     expectedAmount: finiteNumber(input.expectedAmount ?? input.baseAmount),
-    rows: limitArray(input.rows, CONFIG_LIMITS.maxCashDraftRows).map((row) => ({
-      label: clipString(row?.label, CONFIG_LIMITS.maxNameLength),
-      operation: row?.operation === 'subtract' ? 'subtract' : 'add',
-      amount: Math.max(0, finiteNumber(row?.amount))
-    }))
+    reservedAmount: Math.max(0, finiteNumber(input.reservedAmount)),
+    rows: limitArray(input.rows, CONFIG_LIMITS.maxCashDraftRows).map((row) => {
+      const amount = finiteNumber(row?.amount)
+      return {
+        label: clipString(row?.label, CONFIG_LIMITS.maxNameLength),
+        operation: row?.operation === 'subtract' || (!row?.operation && amount < 0) ? 'subtract' : 'add',
+        amount: Math.abs(amount)
+      }
+    })
   }
 }
 
@@ -153,9 +158,18 @@ function normalizeCashDrafts(input) {
   return drafts
 }
 
+export function defaultHoldingLeverage(input = {}) {
+  if (/正\s*[2２]/u.test(String(input.name || ''))) return 2
+  return input.assetClass === 'bond' ? 0 : 1
+}
+
 function normalizeHolding(input = {}, fallbackOrder = 0) {
-  const leverageInput = Number(input.leverage ?? input.multiplier)
   const inverse = input.direction === 'inverse'
+  const legacyMultiplier = Number(input.multiplier)
+  const inferredLeverage = defaultHoldingLeverage(input)
+  const leverageInput = Number(input.leverage ?? (inverse && Number.isFinite(legacyMultiplier)
+    ? legacyMultiplier
+    : inferredLeverage !== 1 ? inferredLeverage : legacyMultiplier))
   const leverage = Number.isFinite(leverageInput) ? Math.trunc(leverageInput) : 1
   return {
     id: String(input.id || ''),
@@ -406,17 +420,22 @@ export function calculateSummary(config) {
   const totalBondExposure = bondHoldings.reduce((sum, holding) => sum + holdingExposure(holding), 0)
   const totalCash = assets.filter((item) => item.assetClass === 'cash').reduce((sum, item) => sum + itemValue(item), 0)
   const totalForeign = assets.filter((item) => item.assetClass === 'foreign').reduce((sum, item) => sum + itemValue(item), 0)
-  const availableAssets = assets.filter((item) => item.liquidity === 'available').reduce((sum, item) => sum + itemValue(item), 0)
-  const availableCash = assets
+  const availableAssetsBeforeReserve = assets.filter((item) => item.liquidity === 'available').reduce((sum, item) => sum + itemValue(item), 0)
+  const availableCashBeforeReserve = assets
     .filter((item) => ['cash', 'foreign'].includes(item.assetClass) && item.liquidity !== 'locked')
     .reduce((sum, item) => sum + itemValue(item), 0)
+  const reservedCash = config?.settings?.cashReconciliationEnabled === false
+    ? 0
+    : Math.max(0, Number(config?.cashDrafts?.[SYSTEM_CASH_ITEM_ID]?.reservedAmount || 0))
+  const availableAssets = Math.max(0, availableAssetsBeforeReserve - reservedCash)
+  const availableCash = Math.max(0, availableCashBeforeReserve - reservedCash)
   const restrictedCash = totalCash + totalForeign - availableCash
   const netWorth = totalAssets - totalLiabilities
 
   return {
     totalAssets: round(totalAssets), totalLiabilities: round(totalLiabilities),
     netWorth: round(netWorth), availableAssets: round(availableAssets),
-    availableCash: round(availableCash), restrictedCash: round(restrictedCash),
+    availableCash: round(availableCash), reservedCash: round(reservedCash), restrictedCash: round(restrictedCash),
     totalStocks: round(totalStocks), stockRatio: totalAssets ? round(totalStocks / totalAssets, 6) : 0,
     totalBonds: round(totalBonds), bondRatio: totalAssets ? round(totalBonds / totalAssets, 6) : 0,
     totalStockExposure: round(totalStockExposure), totalBondExposure: round(totalBondExposure),

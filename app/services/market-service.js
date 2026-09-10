@@ -4,40 +4,15 @@ const TWSE_STOCK_URL = 'https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_
 const TWSE_INDEX_URL = 'https://openapi.twse.com.tw/v1/exchangeReport/MI_INDEX'
 const TWSE_MARKET_HISTORY_URL = 'https://www.twse.com.tw/exchangeReport/FMTQIK?response=json'
 const TPEX_STOCK_URL = 'https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes'
-const FINMIND_PRICE_URL = 'https://api.finmindtrade.com/api/v4/data'
 const LOCAL_CATALOG_URL = '/data/market-instruments.json'
 const LOCAL_MARKET_URL = '/data/market-summary.json'
 
 let instrumentCache = null
 let instrumentCacheExpiresAt = 0
-const latestPriceCache = new Map()
-const PRICE_CACHE_LIMIT = 200
-const MARKET_FETCH_CONCURRENCY = 4
 
 const toNumber = (value) => {
   const number = Number(String(value ?? '').replaceAll(',', '').replace('--', ''))
   return Number.isFinite(number) ? number : null
-}
-
-async function mapWithConcurrency(items, concurrency, worker) {
-  const results = new Array(items.length)
-  let nextIndex = 0
-  const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex
-      nextIndex += 1
-      results[index] = await worker(items[index], index)
-    }
-  })
-  await Promise.all(runners)
-  return results
-}
-
-function rememberLatestPrice(ticker, value) {
-  latestPriceCache.set(ticker, { value, expiresAt: Date.now() + 5 * 60 * 1000 })
-  if (latestPriceCache.size <= PRICE_CACHE_LIMIT) return
-  const oldestKey = latestPriceCache.keys().next().value
-  if (oldestKey != null) latestPriceCache.delete(oldestKey)
 }
 
 async function fetchJson(url, options = {}) {
@@ -79,46 +54,10 @@ async function fetchLatestTaiexHistory() {
   return history
 }
 
-const taipeiDate = (date) => new Intl.DateTimeFormat('sv-SE', {
-  timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit'
-}).format(date)
-
 export function yahooQuoteUrl(ticker, market) {
   const normalized = normalizeTicker(ticker)
   if (!normalized) return ''
   return `https://tw.stock.yahoo.com/quote/${encodeURIComponent(normalized)}.${market === 'TPEx' ? 'TWO' : 'TW'}`
-}
-
-async function fetchLatestPrice(ticker, force = false) {
-  const normalized = normalizeTicker(ticker)
-  if (!normalized) throw new Error('商品代號無效。')
-  const cached = latestPriceCache.get(normalized)
-  if (!force && cached && cached.expiresAt > Date.now()) return cached.value
-
-  const start = new Date()
-  start.setDate(start.getDate() - 14)
-  const query = new URLSearchParams({
-    dataset: 'TaiwanStockPrice',
-    data_id: normalized,
-    start_date: taipeiDate(start),
-    end_date: taipeiDate(new Date())
-  })
-  const payload = await fetchJson(`${FINMIND_PRICE_URL}?${query}`)
-  if (Number(payload?.status) !== 200 || !Array.isArray(payload?.data)) {
-    throw new Error(payload?.msg || 'FinMind 沒有回傳可用資料。')
-  }
-  const latest = payload.data
-    .filter((row) => String(row.stock_id || '').toUpperCase() === normalized && toNumber(row.close) > 0)
-    .sort((a, b) => String(a.date).localeCompare(String(b.date)))
-    .at(-1)
-  if (!latest) throw new Error(`FinMind 查不到 ${normalized} 最近的收盤價。`)
-  const value = {
-    price: toNumber(latest.close),
-    openPrice: toNumber(latest.open),
-    marketDate: toMarketDate(latest.date)
-  }
-  rememberLatestPrice(normalized, value)
-  return value
 }
 
 async function fetchInstrumentCatalog() {
@@ -198,6 +137,25 @@ async function fetchInstrumentCatalog() {
   return instrumentCache
 }
 
+async function requestYahooQuotes(wanted, catalog, { force = false } = {}) {
+  const symbols = wanted.map((ticker) => {
+    const market = catalog.instruments.get(ticker)?.market
+    return `${ticker}.${market === 'TPEx' ? 'TWO' : 'TW'}`
+  })
+  const query = new URLSearchParams({ symbols: symbols.join(',') })
+  if (force) query.set('_', String(Date.now()))
+  const payload = await fetchJson(`/api/stock-quotes?${query}`, { cache: 'no-store' })
+  const quotes = {}
+  const warnings = []
+
+  for (const ticker of wanted) {
+    if (payload?.quotes?.[ticker]?.currentPrice != null) quotes[ticker] = payload.quotes[ticker]
+    else warnings.push(payload?.warnings?.find((warning) => warning.startsWith(`${ticker}.`)) || `${ticker} 暫時沒有可用的 Yahoo Finance 行情。`)
+  }
+
+  return { quotes, warnings, fetchedAt: payload?.fetchedAt || new Date().toISOString() }
+}
+
 export async function lookupMarketInstrument(input) {
   const ticker = normalizeTicker(input)
   if (!ticker) throw new Error('請先輸入股票或商品代號。')
@@ -207,28 +165,21 @@ export async function lookupMarketInstrument(input) {
     if (warnings.length === 2 && !hasLocalCatalog) throw new Error('官方線上資料與本機商品快取都無法讀取，請重新整理後再試或改用手動輸入。')
     throw new Error(`查不到代號 ${ticker}；目前自動查詢支援台灣上市與上櫃商品。`)
   }
-  let latest = null
-  try {
-    latest = await fetchLatestPrice(ticker)
-  } catch {
-    // 線上日行情失敗時保留官方商品快取，讓使用者仍可建立持倉。
-  }
-  const resolved = { ...instrument, ...(latest || {}) }
-  if (!resolved.name || !resolved.price) {
-    throw new Error(`已找到 ${ticker}，但官方資料沒有可用的名稱或收盤價，請改用手動輸入。`)
-  }
-  const organization = resolved.market === 'TWSE' ? '臺灣證券交易所' : '證券櫃檯買賣中心'
-  const cachedDate = resolved.cachedAt ? new Date(resolved.cachedAt).toLocaleDateString('zh-TW', { timeZone: 'Asia/Taipei' }) : ''
-  const marketDate = resolved.marketDate ? new Date(`${resolved.marketDate}T12:00:00+08:00`).toLocaleDateString('zh-TW', { timeZone: 'Asia/Taipei' }) : ''
+  const result = await requestYahooQuotes([ticker], { instruments })
+  const quote = result.quotes[ticker]
+  if (!quote) throw new Error(result.warnings[0] || `Yahoo Finance 查不到 ${ticker} 的行情。`)
+  if (!quote.name) throw new Error(`Yahoo Finance 已找到 ${ticker}，但沒有回傳商品名稱。`)
+  const market = quote.market || instrument.market
   return {
-    ...resolved,
-    source: latest
-      ? `FinMind 公開日行情（收盤日：${marketDate}）`
-      : resolved.cachedAt
-        ? `${organization}官方資料快取（收盤日：${marketDate || cachedDate}）`
-        : `${organization}${marketDate ? `（收盤日：${marketDate}）` : ''}`,
-    yahooUrl: yahooQuoteUrl(ticker, resolved.market),
-    fallback: !latest
+    ticker,
+    name: quote.name,
+    price: quote.currentPrice,
+    market,
+    marketDate: quote.marketDate,
+    quoteTime: quote.quoteTime,
+    source: quote.source || 'Yahoo Finance 行情',
+    yahooUrl: yahooQuoteUrl(ticker, market),
+    fallback: false
   }
 }
 
@@ -241,31 +192,19 @@ export async function lookupMarketInstrumentName(input) {
     if (warnings.length === 2 && !hasLocalCatalog) throw new Error('官方線上資料與本機商品快取都無法讀取，請重新整理後再試。')
     throw new Error(`查不到代號 ${ticker}；目前自動查詢支援台灣上市與上櫃商品。`)
   }
-  if (!instrument.name) throw new Error(`已找到 ${ticker}，但商品資料沒有中文名稱。`)
-  return { ticker: instrument.ticker, name: instrument.name, market: instrument.market }
+  const result = await requestYahooQuotes([ticker], { instruments })
+  const quote = result.quotes[ticker]
+  if (!quote) throw new Error(result.warnings[0] || `Yahoo Finance 查不到 ${ticker} 的行情。`)
+  if (!quote.name) throw new Error(`Yahoo Finance 已找到 ${ticker}，但沒有回傳商品名稱。`)
+  return { ticker, name: quote.name, market: quote.market || instrument.market }
 }
 
 export async function fetchStockBuyListQuotes(tickers = [], { force = false } = {}) {
   const wanted = [...new Set(tickers.map((ticker) => normalizeTicker(ticker)).filter(Boolean))]
-  const quotes = {}
-  const warnings = []
-  if (!wanted.length) return { quotes, warnings, fetchedAt: new Date().toISOString() }
+  if (!wanted.length) return { quotes: {}, warnings: [], fetchedAt: new Date().toISOString() }
 
   const catalog = await fetchInstrumentCatalog()
-  const symbols = wanted.map((ticker) => {
-    const market = catalog.instruments.get(ticker)?.market
-    return `${ticker}.${market === 'TPEx' ? 'TWO' : 'TW'}`
-  })
-  const query = new URLSearchParams({ symbols: symbols.join(',') })
-  if (force) query.set('_', String(Date.now()))
-  const payload = await fetchJson(`/api/stock-quotes?${query}`, { cache: 'no-store' })
-
-  for (const ticker of wanted) {
-    if (payload?.quotes?.[ticker]?.currentPrice != null) quotes[ticker] = payload.quotes[ticker]
-    else warnings.push(payload?.warnings?.find((warning) => warning.startsWith(`${ticker}.`)) || `${ticker} 暫時沒有可用的盤中行情。`)
-  }
-
-  return { quotes, warnings, fetchedAt: payload?.fetchedAt || new Date().toISOString() }
+  return requestYahooQuotes(wanted, catalog, { force })
 }
 
 export async function fetchMarketPreview(tickers = []) {
@@ -278,35 +217,20 @@ export async function fetchMarketPreview(tickers = []) {
   try {
     const catalog = await fetchInstrumentCatalog()
     const wanted = [...new Set(tickers.map((ticker) => normalizeTicker(ticker)).filter(Boolean))]
-    const latestResults = await mapWithConcurrency(wanted, MARKET_FETCH_CONCURRENCY, async (ticker) => {
-      try {
-        return { status: 'fulfilled', ticker, latest: await fetchLatestPrice(ticker) }
-      } catch (error) {
-        return { status: 'rejected', ticker, reason: error }
-      }
-    })
-    for (const result of latestResults) {
-      if (result.status !== 'fulfilled') continue
-      prices[result.ticker] = result.latest.price
-      priceDates[result.ticker] = result.latest.marketDate
-      priceSources[result.ticker] = 'FinMind 公開日行情'
+    const yahooResult = wanted.length ? await requestYahooQuotes(wanted, catalog) : { quotes: {}, warnings: [] }
+    for (const [ticker, quote] of Object.entries(yahooResult.quotes)) {
+      prices[ticker] = quote.currentPrice
+      priceDates[ticker] = quote.marketDate
+      priceSources[ticker] = quote.source || 'Yahoo Finance 行情'
     }
+    warnings.push(...yahooResult.warnings)
     if (!catalog.hasLocalCatalog) warnings.push(...catalog.warnings)
     for (const ticker of wanted) {
       const instrument = catalog.instruments.get(ticker)
       yahooUrls[ticker] = yahooQuoteUrl(ticker, instrument?.market)
-      if (prices[ticker] != null) continue
-      if (instrument?.price != null) {
-        prices[ticker] = instrument.price
-        priceDates[ticker] = instrument.marketDate
-        priceSources[ticker] = '官方資料快取'
-        warnings.push(`無法取得 ${ticker} 的最新日行情，暫時使用 ${instrument.marketDate || '先前交易日'} 官方快取。`)
-      } else {
-        warnings.push(`查不到 ${ticker} 的最新收盤價，已保留原本價格。`)
-      }
     }
   } catch {
-    warnings.push('瀏覽器無法取得上市／上櫃收盤價，已保留手動價格。')
+    warnings.push('無法取得 Yahoo Finance 股票行情，已保留原本價格。')
   }
   const [localMarketResult, onlineMarketResult] = await Promise.allSettled([
     fetchJson(LOCAL_MARKET_URL),

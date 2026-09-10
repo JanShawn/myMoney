@@ -446,10 +446,11 @@ export const useMoneyStore = defineStore('money', () => {
     draft.cashDrafts ||= {}
     draft.cashDrafts[accountId] = {
       expectedAmount: Number(body.expectedAmount ?? body.baseAmount ?? 0),
+      reservedAmount: Math.max(0, Number(body.reservedAmount || 0)),
       rows: (body.rows || []).map((row) => ({
         label: String(row.label || ''),
         operation: row.operation === 'subtract' ? 'subtract' : 'add',
-        amount: Number(row.amount || 0)
+        amount: Math.abs(Number(row.amount || 0))
       }))
     }
     return draft.cashDrafts[accountId]
