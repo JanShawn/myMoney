@@ -13,7 +13,7 @@ describe('snapshot storage', () => {
 
   it('舊版資料會補上靜態架構需要的 snapshots', () => {
     const config = normalizeConfig({ version: 1, groups: [], items: [], holdings: [] })
-    expect(config.version).toBe(7)
+    expect(config.version).toBe(8)
     expect(config.snapshots).toEqual([])
     expect(config.cashDrafts).toEqual({})
     expect(config.settings.snapshotDisplayLimit).toBe(30)

@@ -6,6 +6,7 @@ export const CONFIG_LIMITS = Object.freeze({
   maxGroups: 200,
   maxItems: 1000,
   maxHoldings: 500,
+  maxStockBuyListItems: 500,
   maxSnapshots: 4000,
   maxRecurringCashflowItems: 500,
   maxCashDrafts: 500,
@@ -15,7 +16,8 @@ export const CONFIG_LIMITS = Object.freeze({
   maxTickerLength: 12
 })
 
-const CONFIG_VERSION = 7
+const CONFIG_VERSION = 8
+const STOCK_TICKER_COLLATOR = new Intl.Collator('en', { sensitivity: 'base' })
 const DEFAULT_GROUP_ORDERS = {
   [SYSTEM_CASH_GROUP_ID]: 0,
   'group-bank': 1,
@@ -79,6 +81,7 @@ export function createDefaultConfig() {
     cashDrafts: {},
     recurringCashflowItems: [],
     holdings: [],
+    stockBuyList: [],
     snapshots: [],
     market: {
       taiex: null, ma240: null, lastUpdatedAt: null, source: 'manual',
@@ -89,6 +92,10 @@ export function createDefaultConfig() {
 
 export function normalizeTicker(value) {
   return clipString(String(value || '').toUpperCase(), CONFIG_LIMITS.maxTickerLength).replace(/[^0-9A-Z]/g, '')
+}
+
+export function compareStockTickers(left, right) {
+  return STOCK_TICKER_COLLATOR.compare(String(left || ''), String(right || ''))
 }
 
 export function normalizeAccountItem(input = {}, fallbackOrder = 0) {
@@ -168,6 +175,18 @@ function normalizeHolding(input = {}, fallbackOrder = 0) {
   }
 }
 
+export function normalizeStockBuyListItem(input = {}, fallbackOrder = 0) {
+  return {
+    id: String(input.id || ''),
+    ticker: normalizeTicker(input.ticker),
+    name: clipString(input.name, CONFIG_LIMITS.maxNameLength),
+    buyPrice: Math.max(0, finiteNumber(input.buyPrice)),
+    quantity: Math.max(0, finiteNumber(input.quantity)),
+    bought: Boolean(input.bought),
+    order: Number.isFinite(Number(input.order)) ? Number(input.order) : fallbackOrder
+  }
+}
+
 function normalizeSnapshot(input = {}) {
   const snapshot = {
     date: clipString(input.date, 32),
@@ -225,6 +244,7 @@ export function assertConfigCollectionLimits(input = {}) {
     ['groups', CONFIG_LIMITS.maxGroups],
     ['items', CONFIG_LIMITS.maxItems],
     ['holdings', CONFIG_LIMITS.maxHoldings],
+    ['stockBuyList', CONFIG_LIMITS.maxStockBuyListItems],
     ['snapshots', CONFIG_LIMITS.maxSnapshots],
     ['recurringCashflowItems', CONFIG_LIMITS.maxRecurringCashflowItems]
   ]
@@ -304,6 +324,8 @@ export function normalizeConfig(input) {
       .map((item, index) => normalizeRecurringCashflowItem(item, index)),
     holdings: limitArray(input.holdings, CONFIG_LIMITS.maxHoldings)
       .map((holding, index) => normalizeHolding(holding, index)),
+    stockBuyList: limitArray(input.stockBuyList, CONFIG_LIMITS.maxStockBuyListItems)
+      .map((item, index) => normalizeStockBuyListItem(item, index)),
     snapshots: limitArray(input.snapshots, CONFIG_LIMITS.maxSnapshots).map(normalizeSnapshot),
     market: normalizeMarket(input.market || {}, defaults.market)
   }

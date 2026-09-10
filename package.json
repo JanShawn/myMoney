@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "nuxt dev --host 127.0.0.1 --port 3000",
-    "build": "nuxt generate",
+    "build": "node scripts/build-sites.mjs",
     "generate": "nuxt generate",
     "preview": "serve .output/public -l 4173",
     "start": "npm run preview",

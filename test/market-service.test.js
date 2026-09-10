@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it, vi } from 'vitest'
-import { fetchMarketPreview, lookupMarketInstrument } from '../app/services/market-service.js'
+import { fetchMarketPreview, fetchStockBuyListQuotes, lookupMarketInstrument, lookupMarketInstrumentName } from '../app/services/market-service.js'
 
 describe('market instrument lookup', () => {
   it('用代號帶回官方名稱與收盤價', async () => {
@@ -16,6 +16,11 @@ describe('market instrument lookup', () => {
       market: 'TWSE',
       marketDate: '2026-08-28',
       fallback: false
+    })
+    await expect(lookupMarketInstrumentName('0050')).resolves.toEqual({
+      ticker: '0050',
+      name: '元大台灣50',
+      market: 'TWSE'
     })
   })
 
@@ -41,6 +46,44 @@ describe('market instrument lookup', () => {
       warnings: []
     })
     expect(fetch).not.toHaveBeenCalledWith(expect.stringContaining('MI_INDEX'), expect.anything())
+  })
+
+  it('待買清單行情包含開盤價、最新價與行情日期', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      const value = String(url)
+      if (value.startsWith('/api/stock-quotes')) {
+        return {
+          ok: true,
+          json: async () => ({
+            quotes: {
+              '2330': {
+                currentPrice: 2450,
+                openPrice: 2445,
+                marketDate: '2026-09-10',
+                quoteTime: '2026-09-10T05:30:10.000Z',
+                source: 'Yahoo Finance 盤中行情'
+              }
+            },
+            warnings: [],
+            fetchedAt: '2026-09-10T05:30:12.000Z'
+          })
+        }
+      }
+      return { ok: true, json: async () => [] }
+    }))
+
+    await expect(fetchStockBuyListQuotes(['2330'], { force: true })).resolves.toMatchObject({
+      quotes: {
+        '2330': {
+          currentPrice: 2450,
+          openPrice: 2445,
+          marketDate: '2026-09-10',
+          quoteTime: '2026-09-10T05:30:10.000Z',
+          source: 'Yahoo Finance 盤中行情'
+        }
+      },
+      warnings: []
+    })
   })
 
   it('證交所最新資料受阻時才回退到本機快取並清楚提示', async () => {

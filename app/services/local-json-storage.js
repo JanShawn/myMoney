@@ -33,6 +33,7 @@ function hasUserData(input) {
   return data.items.some((item) => !item.system)
     || data.recurringCashflowItems.length > 0
     || data.holdings.length > 0
+    || data.stockBuyList.length > 0
     || data.snapshots.length > 0
     || data.items.some((item) => item.system && Number(item.amount) !== 0)
     || cashDrafts.some((draft) => Number(draft.expectedAmount) !== 0 || draft.rows?.some((row) => row.label || Number(row.amount) !== 0))
@@ -44,6 +45,7 @@ function configSummary(input) {
     lastSavedAt: data.settings?.lastSavedAt || null,
     accounts: data.items.filter((item) => !item.archived).length,
     holdings: data.holdings.filter((item) => !item.archived).length,
+    stockBuyListItems: data.stockBuyList.length,
     snapshots: data.snapshots.length,
     recurringCashflowItems: data.recurringCashflowItems.length
   }
@@ -133,6 +135,26 @@ export function summarizeConfigChanges(beforeInput, afterInput) {
   }
   for (const [id, holding] of beforeHoldings) {
     if (!afterHoldings.has(id)) changes.push(`移除持倉「${holdingLabel(holding)}」`)
+  }
+
+  const beforeStockBuyList = recordsById(before.stockBuyList)
+  const afterStockBuyList = recordsById(after.stockBuyList)
+  for (const [id, item] of afterStockBuyList) {
+    const previous = beforeStockBuyList.get(id)
+    const label = holdingLabel(item)
+    if (!previous) {
+      changes.push(`新增待買股票「${label}」`)
+      continue
+    }
+    const details = []
+    if (Number(previous.buyPrice || 0) !== Number(item.buyPrice || 0)) details.push(`買進價格 ${formatChangedNumber(previous.buyPrice)} → ${formatChangedNumber(item.buyPrice)}`)
+    if (Number(previous.quantity || 0) !== Number(item.quantity || 0)) details.push(`股數 ${formatChangedNumber(previous.quantity)} → ${formatChangedNumber(item.quantity)}`)
+    if (previous.bought !== item.bought) details.push(item.bought ? '標記今日已買進' : '取消今日買進')
+    if (Number(previous.order || 0) !== Number(item.order || 0)) details.push('調整顯示順序')
+    if (details.length) changes.push(`待買股票「${label}」：${details.join('、')}`)
+  }
+  for (const [id, item] of beforeStockBuyList) {
+    if (!afterStockBuyList.has(id)) changes.push(`移除待買股票「${holdingLabel(item)}」`)
   }
 
   const beforeSnapshots = new Map(before.snapshots.map((snapshot) => [snapshot.date, snapshot]))
@@ -251,7 +273,7 @@ function validateJsonConfig(parsed, fileName = 'JSON') {
   const hasKnownData = isObject && (
     'version' in parsed || 'settings' in parsed || Array.isArray(parsed.groups)
     || Array.isArray(parsed.items) || Array.isArray(parsed.holdings) || Array.isArray(parsed.snapshots)
-    || Array.isArray(parsed.recurringCashflowItems)
+    || Array.isArray(parsed.recurringCashflowItems) || Array.isArray(parsed.stockBuyList)
   )
   if (!hasKnownData) throw new Error(`「${fileName}」不是 myMoney 完整備份，未找到帳戶、持倉或設定資料。`)
   assertConfigCollectionLimits(parsed)
@@ -427,6 +449,10 @@ export async function resetLocalData() {
 
   const data = createResetConfig()
   await dbSet(CACHE_KEY, data)
+  await dbDelete(JSON_BACKUP_META_KEY)
+  await dbDelete(JSON_BACKUP_DATA_KEY)
+  await dbDelete(LEGACY_FILE_META_KEY)
+  await dbDelete(LEGACY_HANDLE_KEY)
 
   return { data, backupStatus: await getBackupStatus(data) }
 }

@@ -23,7 +23,12 @@ export default defineNuxtConfig({
   css: ['~/assets/css/main.css'],
   vite: { plugins: [tailwindcss()], server: { strictPort: true } },
   nitro: {
-    preset: 'static',
+    preset: 'cloudflare_module',
+    output: {
+      dir: 'dist',
+      serverDir: 'dist/server',
+      publicDir: 'dist/client'
+    },
     routeRules: {
       '/**': {
         headers: {

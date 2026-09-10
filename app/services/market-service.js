@@ -89,11 +89,11 @@ export function yahooQuoteUrl(ticker, market) {
   return `https://tw.stock.yahoo.com/quote/${encodeURIComponent(normalized)}.${market === 'TPEx' ? 'TWO' : 'TW'}`
 }
 
-async function fetchLatestPrice(ticker) {
+async function fetchLatestPrice(ticker, force = false) {
   const normalized = normalizeTicker(ticker)
   if (!normalized) throw new Error('商品代號無效。')
   const cached = latestPriceCache.get(normalized)
-  if (cached && cached.expiresAt > Date.now()) return cached.value
+  if (!force && cached && cached.expiresAt > Date.now()) return cached.value
 
   const start = new Date()
   start.setDate(start.getDate() - 14)
@@ -112,7 +112,11 @@ async function fetchLatestPrice(ticker) {
     .sort((a, b) => String(a.date).localeCompare(String(b.date)))
     .at(-1)
   if (!latest) throw new Error(`FinMind 查不到 ${normalized} 最近的收盤價。`)
-  const value = { price: toNumber(latest.close), marketDate: toMarketDate(latest.date) }
+  const value = {
+    price: toNumber(latest.close),
+    openPrice: toNumber(latest.open),
+    marketDate: toMarketDate(latest.date)
+  }
   rememberLatestPrice(normalized, value)
   return value
 }
@@ -226,6 +230,42 @@ export async function lookupMarketInstrument(input) {
     yahooUrl: yahooQuoteUrl(ticker, resolved.market),
     fallback: !latest
   }
+}
+
+export async function lookupMarketInstrumentName(input) {
+  const ticker = normalizeTicker(input)
+  if (!ticker) throw new Error('請先輸入股票或商品代號。')
+  const { instruments, warnings, hasLocalCatalog } = await fetchInstrumentCatalog()
+  const instrument = instruments.get(ticker)
+  if (!instrument) {
+    if (warnings.length === 2 && !hasLocalCatalog) throw new Error('官方線上資料與本機商品快取都無法讀取，請重新整理後再試。')
+    throw new Error(`查不到代號 ${ticker}；目前自動查詢支援台灣上市與上櫃商品。`)
+  }
+  if (!instrument.name) throw new Error(`已找到 ${ticker}，但商品資料沒有中文名稱。`)
+  return { ticker: instrument.ticker, name: instrument.name, market: instrument.market }
+}
+
+export async function fetchStockBuyListQuotes(tickers = [], { force = false } = {}) {
+  const wanted = [...new Set(tickers.map((ticker) => normalizeTicker(ticker)).filter(Boolean))]
+  const quotes = {}
+  const warnings = []
+  if (!wanted.length) return { quotes, warnings, fetchedAt: new Date().toISOString() }
+
+  const catalog = await fetchInstrumentCatalog()
+  const symbols = wanted.map((ticker) => {
+    const market = catalog.instruments.get(ticker)?.market
+    return `${ticker}.${market === 'TPEx' ? 'TWO' : 'TW'}`
+  })
+  const query = new URLSearchParams({ symbols: symbols.join(',') })
+  if (force) query.set('_', String(Date.now()))
+  const payload = await fetchJson(`/api/stock-quotes?${query}`, { cache: 'no-store' })
+
+  for (const ticker of wanted) {
+    if (payload?.quotes?.[ticker]?.currentPrice != null) quotes[ticker] = payload.quotes[ticker]
+    else warnings.push(payload?.warnings?.find((warning) => warning.startsWith(`${ticker}.`)) || `${ticker} 暫時沒有可用的盤中行情。`)
+  }
+
+  return { quotes, warnings, fetchedAt: payload?.fetchedAt || new Date().toISOString() }
 }
 
 export async function fetchMarketPreview(tickers = []) {

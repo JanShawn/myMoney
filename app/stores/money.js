@@ -1,11 +1,11 @@
 import { defineStore } from 'pinia'
 import { toRaw } from 'vue'
-import { calculateRecurringCashflow, calculateSummary, createDefaultConfig, normalizeAccountItem, normalizeConfig, SYSTEM_CASH_GROUP_ID, SYSTEM_CASH_ITEM_ID, upsertSnapshot } from '~/services/money-domain'
+import { calculateRecurringCashflow, calculateSummary, compareStockTickers, createDefaultConfig, normalizeAccountItem, normalizeConfig, normalizeTicker, SYSTEM_CASH_GROUP_ID, SYSTEM_CASH_ITEM_ID, upsertSnapshot } from '~/services/money-domain'
 import {
   importJsonFile, inspectJsonImport, listLocalBackups, loadLocalData, persistLocalData,
   resetLocalData, restoreLocalBackup, saveJsonBackup
 } from '~/services/local-json-storage'
-import { fetchMarketPreview, lookupMarketInstrument } from '~/services/market-service'
+import { fetchMarketPreview, fetchStockBuyListQuotes, lookupMarketInstrument, lookupMarketInstrumentName } from '~/services/market-service'
 import { fetchTwdExchangeRates } from '~/services/exchange-rate-service'
 import { exportSnapshotsToExcel } from '~/services/excel-transfer'
 
@@ -34,6 +34,8 @@ export const useMoneyStore = defineStore('money', () => {
   const activeHoldings = computed(() => config.value.holdings
     .filter((item) => !item.archived)
     .sort((a, b) => Number(a.order || 0) - Number(b.order || 0)))
+  const stockBuyList = computed(() => [...(config.value.stockBuyList || [])]
+    .sort((a, b) => compareStockTickers(a.ticker, b.ticker)))
   const recurringCashflowItems = computed(() => [...(config.value.recurringCashflowItems || [])]
     .sort((left, right) => Number(left.order || 0) - Number(right.order || 0)))
   const lastSnapshot = computed(() => snapshots.value.at(-1) || null)
@@ -265,6 +267,76 @@ export const useMoneyStore = defineStore('money', () => {
     return ordered[index]
   })
 
+  const addStockBuyListItem = (body) => mutate((draft) => {
+    const ticker = normalizeTicker(body.ticker)
+    if (!ticker) throw new Error('請輸入股票代號。')
+    draft.stockBuyList ||= []
+    if (draft.stockBuyList.some((item) => item.ticker === ticker)) throw new Error('這檔股票已經在待買清單中。')
+    const nextOrder = draft.stockBuyList.reduce((highest, item) => Math.max(highest, Number(item.order ?? -1)), -1) + 1
+    const item = {
+      id: crypto.randomUUID(),
+      ticker,
+      name: String(body.name || '').trim(),
+      buyPrice: 0,
+      quantity: 0,
+      bought: false,
+      order: nextOrder
+    }
+    draft.stockBuyList.push(item)
+    return item
+  })
+
+  const updateStockBuyListItem = (id, body) => mutate((draft) => {
+    const item = draft.stockBuyList?.find((entry) => entry.id === id)
+    if (!item) throw new Error('找不到這筆待買股票。')
+    const allowed = {}
+    for (const key of ['buyPrice', 'quantity', 'bought', 'order']) {
+      if (Object.hasOwn(body, key)) allowed[key] = body[key]
+    }
+    if ('buyPrice' in allowed) {
+      const buyPrice = Number(allowed.buyPrice || 0)
+      if (!Number.isFinite(buyPrice) || buyPrice < 0) throw new Error('買進價格不能小於 0。')
+      allowed.buyPrice = buyPrice
+    }
+    if ('quantity' in allowed) {
+      const quantity = Number(allowed.quantity || 0)
+      if (!Number.isFinite(quantity) || quantity < 0) throw new Error('股數不能小於 0。')
+      allowed.quantity = quantity
+    }
+    if ('bought' in allowed) allowed.bought = Boolean(allowed.bought)
+    Object.assign(item, allowed)
+    return item
+  })
+
+  const deleteStockBuyListItem = (id) => mutate((draft) => {
+    const index = draft.stockBuyList?.findIndex((entry) => entry.id === id) ?? -1
+    if (index < 0) throw new Error('找不到要刪除的待買股票。')
+    const [item] = draft.stockBuyList.splice(index, 1)
+    return item
+  })
+
+  const resetStockBuyListDaily = () => mutate((draft) => {
+    for (const item of draft.stockBuyList || []) {
+      item.bought = false
+      item.buyPrice = 0
+      item.quantity = 0
+    }
+    return draft.stockBuyList || []
+  })
+
+  const updateStockBuyListNames = (entries) => mutate((draft) => {
+    const namesById = new Map((entries || []).map((entry) => [entry.id, String(entry.name || '').trim()]))
+    let updatedCount = 0
+    for (const item of draft.stockBuyList || []) {
+      const name = namesById.get(item.id)
+      if (!item.name && name) {
+        item.name = name
+        updatedCount += 1
+      }
+    }
+    return updatedCount
+  })
+
   const updateSettings = (body) => mutate((draft) => {
     const allowed = {}
     for (const key of ['baseCurrency', 'snapshotDisplayLimit', 'cashReconciliationEnabled', 'lastSavedAt']) {
@@ -407,6 +479,8 @@ export const useMoneyStore = defineStore('money', () => {
   }
 
   const lookupHolding = (ticker) => lookupMarketInstrument(ticker)
+  const lookupStockName = (ticker) => lookupMarketInstrumentName(ticker)
+  const loadStockBuyListQuotes = (force = false) => fetchStockBuyListQuotes(stockBuyList.value.map((item) => item.ticker), { force })
 
   async function refreshExchangeRates(force = false) {
     const market = config.value.market || {}
@@ -473,10 +547,11 @@ export const useMoneyStore = defineStore('money', () => {
 
   return {
     config, summary, cashflowPlan, snapshots, loading, saving, error, storageStatus,
-    activeItems, activeHoldings, recurringCashflowItems, lastSnapshot,
+    activeItems, activeHoldings, stockBuyList, recurringCashflowItems, lastSnapshot,
     load, addGroup, updateGroup, deleteGroup, addItem, updateItem, deleteItem, moveItem, addHolding, updateHolding, deleteHolding, moveHolding,
     updateSettings, updateCashDraft, addRecurringCashflowItem, updateRecurringCashflowItem, deleteRecurringCashflowItem, swapRecurringCashflowItems, moveRecurringCashflowItem,
-    lookupHolding, marketPreview, refreshExchangeRates, saveSnapshot, deleteSnapshot,
+    addStockBuyListItem, updateStockBuyListItem, deleteStockBuyListItem, resetStockBuyListDaily, updateStockBuyListNames,
+    lookupHolding, lookupStockName, loadStockBuyListQuotes, marketPreview, refreshExchangeRates, saveSnapshot, deleteSnapshot,
     saveJson, previewJsonImport, importJson,
     getBackups, restoreBackup, resetAllData,
     exportExcel
