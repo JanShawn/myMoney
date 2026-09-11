@@ -36,7 +36,9 @@ function hasUserData(input) {
     || data.stockBuyList.length > 0
     || data.snapshots.length > 0
     || data.items.some((item) => item.system && Number(item.amount) !== 0)
-    || cashDrafts.some((draft) => Number(draft.expectedAmount) !== 0 || Number(draft.reservedAmount) !== 0 || draft.rows?.some((row) => row.label || Number(row.amount) !== 0))
+    || cashDrafts.some((draft) => Number(draft.expectedAmount) !== 0
+      || draft.reservations?.some((reservation) => reservation.label || Number(reservation.amount) !== 0)
+      || draft.rows?.some((row) => row.label || Number(row.amount) !== 0))
 }
 
 function configSummary(input) {
@@ -147,9 +149,11 @@ export function summarizeConfigChanges(beforeInput, afterInput) {
       continue
     }
     const details = []
+    if (previous.ticker !== item.ticker || previous.name !== item.name) details.push(`名稱或代號改為「${label}」`)
     if (Number(previous.buyPrice || 0) !== Number(item.buyPrice || 0)) details.push(`買進價格 ${formatChangedNumber(previous.buyPrice)} → ${formatChangedNumber(item.buyPrice)}`)
     if (Number(previous.quantity || 0) !== Number(item.quantity || 0)) details.push(`股數 ${formatChangedNumber(previous.quantity)} → ${formatChangedNumber(item.quantity)}`)
-    if (previous.bought !== item.bought) details.push(item.bought ? '標記今日已買進' : '取消今日買進')
+    if (Number(previous.addOnPrice || 0) !== Number(item.addOnPrice || 0)) details.push(`加碼價格 ${formatChangedNumber(previous.addOnPrice)} → ${formatChangedNumber(item.addOnPrice)}`)
+    if (Number(previous.targetQuantity || 0) !== Number(item.targetQuantity || 0)) details.push(`目標總股數 ${formatChangedNumber(previous.targetQuantity)} → ${formatChangedNumber(item.targetQuantity)}`)
     if (Number(previous.order || 0) !== Number(item.order || 0)) details.push('調整顯示順序')
     if (details.length) changes.push(`待買股票「${label}」：${details.join('、')}`)
   }
@@ -209,16 +213,6 @@ export function summarizeConfigChanges(beforeInput, afterInput) {
   return changes
 }
 
-function fileTimestamp(date = new Date()) {
-  const parts = [
-    date.getFullYear(),
-    String(date.getMonth() + 1).padStart(2, '0'),
-    String(date.getDate()).padStart(2, '0')
-  ]
-  const time = `${String(date.getHours()).padStart(2, '0')}${String(date.getMinutes()).padStart(2, '0')}${String(date.getSeconds()).padStart(2, '0')}`
-  return `${parts.join('-')}-${time}`
-}
-
 function openDatabase() {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, 1)
@@ -264,9 +258,7 @@ async function addBackup(data) {
   await dbSet(BACKUPS_KEY, backups.slice(-BACKUP_LIMIT))
 }
 
-function backupFileName(date = new Date()) {
-  return `myMoney-backup-${fileTimestamp(date)}.json`
-}
+const JSON_BACKUP_FILE_NAME = 'myMoney-backup.json'
 
 function validateJsonConfig(parsed, fileName = 'JSON') {
   const isObject = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
@@ -363,7 +355,7 @@ export async function persistLocalData(input, options = {}) {
 export async function saveJsonBackup(input) {
   const data = toPlainConfig(input)
   const createdAt = new Date().toISOString()
-  let fileName = backupFileName(new Date(createdAt))
+  let fileName = JSON_BACKUP_FILE_NAME
 
   try {
     if (supportsFileSystemAccess()) {

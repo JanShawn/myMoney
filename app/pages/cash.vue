@@ -6,7 +6,8 @@ import { SYSTEM_CASH_ITEM_ID } from '~/services/money-domain'
 const store = useMoneyStore()
 const { showToast } = useToast()
 const expectedAmount = ref(0)
-const reservedAmount = ref(0)
+const createReservation = (label = '', amount = '') => ({ id: crypto.randomUUID(), label, amount })
+const reservations = ref([createReservation()])
 const createRow = (operation = 'add', amount = '') => ({ id: crypto.randomUUID(), label: '', operation, amount })
 const rows = ref([createRow()])
 const cashReconciliationEnabled = computed(() => store.config?.settings?.cashReconciliationEnabled !== false)
@@ -20,6 +21,7 @@ const formatIntegerInput = (value) => value === '' || value == null
   ? ''
   : new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(Number(value) || 0)
 const actualAmount = computed(() => rows.value.reduce((sum, row) => sum + signedAmount(row), 0))
+const reservedAmount = computed(() => reservations.value.reduce((sum, reservation) => sum + Number(reservation.amount || 0), 0))
 const difference = computed(() => actualAmount.value - Number(expectedAmount.value || 0))
 const availableCashBeforeReserve = computed(() => store.activeItems
   .filter((item) => ['cash', 'foreign'].includes(item.assetClass) && item.liquidity !== 'locked')
@@ -60,7 +62,12 @@ function hydrateDraft(accountId) {
   const draft = store.config.cashDrafts?.[accountId]
   hydratingDraft.value = true
   expectedAmount.value = Math.max(0, Number(draft?.expectedAmount ?? draft?.baseAmount ?? item.amount ?? 0))
-  reservedAmount.value = Math.max(0, Number(draft?.reservedAmount || 0))
+  const legacyReservedAmount = Math.max(0, Number(draft?.reservedAmount || 0))
+  reservations.value = draft?.reservations?.length
+    ? draft.reservations.map((reservation) => createReservation(reservation.label || '', Math.max(0, Number(reservation.amount || 0)) || ''))
+    : legacyReservedAmount > 0
+      ? [createReservation('待扣款／保留款', legacyReservedAmount)]
+      : [createReservation()]
   rows.value = draft?.rows?.length
     ? draft.rows.map((row) => ({
         id: crypto.randomUUID(),
@@ -72,13 +79,18 @@ function hydrateDraft(accountId) {
   nextTick(() => { hydratingDraft.value = false })
 }
 
-watch([expectedAmount, reservedAmount, rows], () => {
+watch([expectedAmount, reservations, rows], () => {
   if (hydratingDraft.value || !selectedId.value) return
   clearTimeout(draftTimer)
   draftTimer = setTimeout(() => persistDraft(), 350)
 }, { deep: true })
 
 function addRow(operation = 'add') { rows.value.push(createRow(operation)) }
+function addReservation() {
+  const reservation = createReservation()
+  reservations.value.push(reservation)
+  focusCashInput(`cash-reserved-label-${reservation.id}`)
+}
 function moveRow(index, direction) {
   const targetIndex = index + direction
   if (targetIndex < 0 || targetIndex >= rows.value.length) return
@@ -93,11 +105,11 @@ function updateExpectedAmount(event) {
   expectedAmount.value = Number(sanitized || 0)
   event.target.value = formatIntegerInput(expectedAmount.value)
 }
-function updateReservedAmount(event) {
+function updateReservedAmount(reservation, event) {
   const raw = event.target.value
   const sanitized = raw.includes('-') ? '0' : raw.split('.')[0].replace(/\D/g, '')
-  reservedAmount.value = Number(sanitized || 0)
-  event.target.value = formatIntegerInput(reservedAmount.value)
+  reservation.amount = sanitized ? Number(sanitized) : ''
+  event.target.value = formatIntegerInput(reservation.amount)
 }
 function updateAdjustment(row, event) {
   const raw = event.target.value
@@ -111,22 +123,23 @@ function focusCashInput(id) {
 function moveFromExpectedAmount(event) {
   if (event.shiftKey) return
   event.preventDefault()
-  focusCashInput('cash-reserved')
+  focusCashInput(`cash-reserved-label-${reservations.value[0]?.id}`)
 }
-function moveFromReservedAmount(event) {
-  if (event.shiftKey) {
+function moveFromReservedAmount(index, event) {
+  const targetReservation = reservations.value[index + (event.shiftKey ? -1 : 1)]
+  if (targetReservation) {
     event.preventDefault()
-    focusCashInput('cash-expected')
+    focusCashInput(`cash-reserved-label-${targetReservation.id}`)
     return
   }
-  if (!rows.value.length) return
+  if (event.shiftKey || !rows.value.length) return
   event.preventDefault()
   focusCashInput(`cash-value-${rows.value[0].id}`)
 }
 function moveBetweenAdjustmentAmounts(index, event) {
   if (event.shiftKey && index === 0) {
     event.preventDefault()
-    focusCashInput('cash-expected')
+    focusCashInput(`cash-reserved-${reservations.value.at(-1)?.id}`)
     return
   }
   const targetRow = rows.value[index + (event.shiftKey ? -1 : 1)]
@@ -137,7 +150,10 @@ function moveBetweenAdjustmentAmounts(index, event) {
 function draftPayload() {
   return {
     expectedAmount: Number(expectedAmount.value || 0),
-    reservedAmount: Number(reservedAmount.value || 0),
+    reservations: reservations.value.map((reservation) => ({
+      label: reservation.label,
+      amount: Math.max(0, Number(reservation.amount || 0))
+    })),
     rows: rows.value.map((row) => ({
       label: row.label,
       operation: row.operation,
@@ -224,8 +240,13 @@ const money = (value) => new Intl.NumberFormat('zh-TW', { style: 'currency', cur
             <input id="cash-expected" :value="formatIntegerInput(expectedAmount)" class="input input--amount baseline-card__input" type="text" inputmode="numeric" pattern="[0-9,]*" @input="updateExpectedAmount" @keydown.tab="moveFromExpectedAmount" />
           </div>
           <div class="reservation-card">
-            <div><span class="baseline-card__eyebrow">Available cash adjustment</span><label for="cash-reserved">待扣款／保留款</label><small>例如股票 T+2 交割款。只降低可動用現金，不參與下方驗算，也不改變總資產與淨資產；交割完成後請清為 0。</small></div>
-            <input id="cash-reserved" :value="formatIntegerInput(reservedAmount)" class="input input--amount baseline-card__input" type="text" inputmode="numeric" pattern="[0-9,]*" placeholder="0" @input="updateReservedAmount" @keydown.tab="moveFromReservedAmount" />
+            <div class="reservation-heading"><div><span class="baseline-card__eyebrow">Available cash adjustment</span><h3>待扣款／保留款</h3><small>例如股票 T+2 交割款。合計只降低可動用現金，不參與下方驗算，也不改變總資產與淨資產。</small></div><strong>{{ money(reservedAmount) }}</strong></div>
+            <div v-for="(reservation, index) in reservations" :key="reservation.id" class="reservation-row">
+              <div class="field"><label :for="`cash-reserved-label-${reservation.id}`">保留款 {{ index + 1 }}</label><input :id="`cash-reserved-label-${reservation.id}`" v-model="reservation.label" class="input" placeholder="例如：2330 T+2 交割款" /></div>
+              <div class="field"><label :for="`cash-reserved-${reservation.id}`">金額</label><input :id="`cash-reserved-${reservation.id}`" :value="formatIntegerInput(reservation.amount)" class="input input--amount" type="text" inputmode="numeric" pattern="[0-9,]*" placeholder="0" @input="updateReservedAmount(reservation, $event)" @keydown.tab="moveFromReservedAmount(index, $event)" /></div>
+              <div class="reservation-actions"><button class="btn btn-ghost" type="button" :disabled="!Number(reservation.amount)" @click="reservation.amount = 0"><RotateCcw :size="15" />清為 0</button><button class="btn btn-ghost btn-icon remove-row" type="button" :aria-label="`刪除保留款 ${index + 1}`" :disabled="reservations.length === 1" @click="reservations.splice(index, 1)"><Trash2 :size="16" /></button></div>
+            </div>
+            <button class="btn btn-secondary reservation-add" type="button" @click="addReservation"><Plus :size="17" />新增保留款</button>
           </div>
           <AppNotice v-if="reserveExceedsAvailableCash" tone="warning" title="待扣款超過目前可動用現金">扣除後可動用現金會以 0 顯示；請確認交割帳戶是否還有其他尚未登錄的餘額。</AppNotice>
           <div class="detail-heading"><div><h3>實際現金明細</h3><p>逐項加入實際持有的現金；需要扣除代墊或支出時切換為「扣除」。</p></div></div>
@@ -289,9 +310,15 @@ const money = (value) => new Intl.NumberFormat('zh-TW', { style: 'currency', cur
 .reconciled-time span { color: var(--muted); font-size: .76rem; }
 .reconciled-time strong { color: var(--text); font-size: .8rem; line-height: 1.4; }
 .baseline-card { display: grid; grid-template-columns: minmax(0, 1fr) minmax(160px, .52fr); align-items: center; gap: 22px; padding: 18px; border: 1px solid var(--notice-border); border-radius: var(--radius-md); background: linear-gradient(135deg, var(--notice-bg), var(--surface-hover)); }
-.reservation-card { display: grid; grid-template-columns: minmax(0, 1fr) minmax(160px, .52fr); align-items: center; gap: 22px; padding: 18px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-muted); }
-.reservation-card > div { display: grid; gap: 4px; }
-.reservation-card label { color: var(--text); font-size: .94rem; font-weight: 750; }
+.reservation-card { display: grid; gap: 14px; padding: 18px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-muted); }
+.reservation-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; }
+.reservation-heading > div { display: grid; gap: 4px; }
+.reservation-heading h3 { margin: 0; font-size: .94rem; }
+.reservation-heading strong { flex: 0 0 auto; font-size: 1.2rem; font-variant-numeric: tabular-nums; }
+.reservation-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(135px, .45fr) auto; align-items: end; gap: 10px; padding-top: 12px; border-top: 1px solid var(--border); }
+.reservation-actions { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; }
+.reservation-actions .remove-row { color: var(--danger); }
+.reservation-add { justify-self: start; }
 .reservation-card small { color: var(--muted); font-size: .78rem; line-height: 1.5; }
 .baseline-card > div { display: grid; gap: 4px; }
 .baseline-card__eyebrow { color: var(--primary); font-size: .75rem; font-weight: 780; letter-spacing: .09em; text-transform: uppercase; }
@@ -316,7 +343,10 @@ const money = (value) => new Intl.NumberFormat('zh-TW', { style: 'currency', cur
 .apply-button { margin-top: 18px; }
 @media (max-width: 880px) { .result-panel { position: static; } }
 @media (max-width: 620px) {
-  .baseline-card, .reservation-card { grid-template-columns: 1fr; }
+  .baseline-card { grid-template-columns: 1fr; }
+  .reservation-heading { align-items: flex-start; }
+  .reservation-row { grid-template-columns: 1fr; }
+  .reservation-actions { justify-content: flex-end; margin: 0; }
   .adjustment-row { grid-template-columns: minmax(0, 1fr); }
   .adjustment-row > .field { grid-column: 1 / -1; }
   .adjustment-actions { grid-column: 1 / -1; justify-content: flex-end; margin: 0; }

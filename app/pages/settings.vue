@@ -174,7 +174,7 @@ function formatBytes(bytes) {
         <button class="btn btn-secondary" type="button" :disabled="store.saving" @click="jsonInput?.click()"><Upload :size="18" />從 JSON 復原</button>
         <input ref="jsonInput" class="sr-only" type="file" accept=".json,application/json" @change="selectJson" />
       </div>
-      <p class="backup-action-note">儲存時會自動使用日期時間命名；你可以在 Windows 視窗修改名稱，選到同名檔案時由 Windows 詢問是否取代。</p>
+      <p class="backup-action-note">預設固定儲存為 myMoney-backup.json；再次儲存時，可在 Windows 視窗直接確認取代。</p>
 
       <details class="technical-details">
         <summary>網址與 Port 說明</summary>

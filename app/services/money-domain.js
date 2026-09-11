@@ -16,7 +16,7 @@ export const CONFIG_LIMITS = Object.freeze({
   maxTickerLength: 12
 })
 
-const CONFIG_VERSION = 8
+const CONFIG_VERSION = 11
 const STOCK_TICKER_COLLATOR = new Intl.Collator('en', { sensitivity: 'base' })
 const DEFAULT_GROUP_ORDERS = {
   [SYSTEM_CASH_GROUP_ID]: 0,
@@ -133,9 +133,18 @@ function normalizeGroup(input = {}, fallbackOrder = 0) {
 }
 
 function normalizeCashDraft(input = {}) {
+  const legacyReservedAmount = Math.max(0, finiteNumber(input.reservedAmount))
+  const reservations = Array.isArray(input.reservations)
+    ? input.reservations
+    : legacyReservedAmount > 0
+      ? [{ label: '待扣款／保留款', amount: legacyReservedAmount }]
+      : []
   return {
     expectedAmount: finiteNumber(input.expectedAmount ?? input.baseAmount),
-    reservedAmount: Math.max(0, finiteNumber(input.reservedAmount)),
+    reservations: limitArray(reservations, CONFIG_LIMITS.maxCashDraftRows).map((reservation) => ({
+      label: clipString(reservation?.label, CONFIG_LIMITS.maxNameLength),
+      amount: Math.max(0, finiteNumber(reservation?.amount))
+    })),
     rows: limitArray(input.rows, CONFIG_LIMITS.maxCashDraftRows).map((row) => {
       const amount = finiteNumber(row?.amount)
       return {
@@ -196,9 +205,28 @@ export function normalizeStockBuyListItem(input = {}, fallbackOrder = 0) {
     name: clipString(input.name, CONFIG_LIMITS.maxNameLength),
     buyPrice: Math.max(0, finiteNumber(input.buyPrice)),
     quantity: Math.max(0, finiteNumber(input.quantity)),
-    bought: Boolean(input.bought),
+    addOnPrice: Math.max(0, finiteNumber(input.addOnPrice)),
+    targetQuantity: Math.max(0, finiteNumber(input.targetQuantity)),
     order: Number.isFinite(Number(input.order)) ? Number(input.order) : fallbackOrder
   }
+}
+
+export function calculateAdditionalBuyQuantity(quantity, targetQuantity) {
+  return Math.max(0, finiteNumber(targetQuantity) - finiteNumber(quantity))
+}
+
+export function calculatePriceDifferencePercent(price, referencePrice) {
+  const comparedPrice = finiteNumber(price, NaN)
+  const reference = finiteNumber(referencePrice, NaN)
+  return comparedPrice > 0 && reference > 0
+    ? ((comparedPrice - reference) / reference) * 100
+    : null
+}
+
+export function calculatePurchasePriceAdvantagePercent(price, referencePrice) {
+  const difference = calculatePriceDifferencePercent(price, referencePrice)
+  if (difference == null || difference === 0) return difference
+  return -difference
 }
 
 function normalizeSnapshot(input = {}) {
@@ -424,9 +452,12 @@ export function calculateSummary(config) {
   const availableCashBeforeReserve = assets
     .filter((item) => ['cash', 'foreign'].includes(item.assetClass) && item.liquidity !== 'locked')
     .reduce((sum, item) => sum + itemValue(item), 0)
+  const cashDraft = config?.cashDrafts?.[SYSTEM_CASH_ITEM_ID]
   const reservedCash = config?.settings?.cashReconciliationEnabled === false
     ? 0
-    : Math.max(0, Number(config?.cashDrafts?.[SYSTEM_CASH_ITEM_ID]?.reservedAmount || 0))
+    : Array.isArray(cashDraft?.reservations)
+      ? cashDraft.reservations.reduce((sum, reservation) => sum + Math.max(0, finiteNumber(reservation?.amount)), 0)
+      : Math.max(0, finiteNumber(cashDraft?.reservedAmount))
   const availableAssets = Math.max(0, availableAssetsBeforeReserve - reservedCash)
   const availableCash = Math.max(0, availableCashBeforeReserve - reservedCash)
   const restrictedCash = totalCash + totalForeign - availableCash

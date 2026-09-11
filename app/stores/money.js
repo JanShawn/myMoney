@@ -279,7 +279,8 @@ export const useMoneyStore = defineStore('money', () => {
       name: String(body.name || '').trim(),
       buyPrice: 0,
       quantity: 0,
-      bought: false,
+      addOnPrice: 0,
+      targetQuantity: 0,
       order: nextOrder
     }
     draft.stockBuyList.push(item)
@@ -290,20 +291,21 @@ export const useMoneyStore = defineStore('money', () => {
     const item = draft.stockBuyList?.find((entry) => entry.id === id)
     if (!item) throw new Error('找不到這筆待買股票。')
     const allowed = {}
-    for (const key of ['buyPrice', 'quantity', 'bought', 'order']) {
+    for (const key of ['buyPrice', 'quantity', 'addOnPrice', 'targetQuantity', 'order']) {
       if (Object.hasOwn(body, key)) allowed[key] = body[key]
     }
-    if ('buyPrice' in allowed) {
-      const buyPrice = Number(allowed.buyPrice || 0)
-      if (!Number.isFinite(buyPrice) || buyPrice < 0) throw new Error('買進價格不能小於 0。')
-      allowed.buyPrice = buyPrice
+    for (const key of ['buyPrice', 'addOnPrice']) {
+      if (!(key in allowed)) continue
+      const price = Number(allowed[key] || 0)
+      if (!Number.isFinite(price) || price < 0) throw new Error('買進價格不能小於 0。')
+      allowed[key] = price
     }
-    if ('quantity' in allowed) {
-      const quantity = Number(allowed.quantity || 0)
+    for (const key of ['quantity', 'targetQuantity']) {
+      if (!(key in allowed)) continue
+      const quantity = Number(allowed[key] || 0)
       if (!Number.isFinite(quantity) || quantity < 0) throw new Error('股數不能小於 0。')
-      allowed.quantity = quantity
+      allowed[key] = quantity
     }
-    if ('bought' in allowed) allowed.bought = Boolean(allowed.bought)
     Object.assign(item, allowed)
     return item
   })
@@ -317,9 +319,10 @@ export const useMoneyStore = defineStore('money', () => {
 
   const resetStockBuyListDaily = () => mutate((draft) => {
     for (const item of draft.stockBuyList || []) {
-      item.bought = false
       item.buyPrice = 0
       item.quantity = 0
+      item.addOnPrice = 0
+      item.targetQuantity = 0
     }
     return draft.stockBuyList || []
   })
@@ -446,7 +449,10 @@ export const useMoneyStore = defineStore('money', () => {
     draft.cashDrafts ||= {}
     draft.cashDrafts[accountId] = {
       expectedAmount: Number(body.expectedAmount ?? body.baseAmount ?? 0),
-      reservedAmount: Math.max(0, Number(body.reservedAmount || 0)),
+      reservations: (body.reservations || []).map((reservation) => ({
+        label: String(reservation.label || ''),
+        amount: Math.max(0, Number(reservation.amount || 0))
+      })),
       rows: (body.rows || []).map((row) => ({
         label: String(row.label || ''),
         operation: row.operation === 'subtract' ? 'subtract' : 'add',

@@ -54,10 +54,13 @@ describe('calculateSummary', () => {
     expect(summary.totalOther).toBe(0)
   })
 
-  it('待扣款只降低可動用金額，不改變總資產與淨資產', () => {
+  it('多筆待扣款只降低可動用金額，不改變總資產與淨資產', () => {
     const summary = calculateSummary({
       settings: { cashReconciliationEnabled: true },
-      cashDrafts: { 'item-cash': { reservedAmount: 3000 } },
+      cashDrafts: { 'item-cash': { reservations: [
+        { label: '2330 T+2', amount: 3000 },
+        { label: '0050 T+2', amount: 1500 }
+      ] } },
       items: [
         { amount: 10000, exchangeRate: 1, currency: 'TWD', assetClass: 'cash', liquidity: 'available', includeInAssets: true, archived: false },
         { amount: 2000, exchangeRate: 1, currency: 'TWD', assetClass: 'cash', liquidity: 'locked', includeInAssets: true, archived: false }
@@ -67,10 +70,24 @@ describe('calculateSummary', () => {
 
     expect(summary.totalAssets).toBe(12000)
     expect(summary.netWorth).toBe(12000)
+    expect(summary.reservedCash).toBe(4500)
+    expect(summary.availableCash).toBe(5500)
+    expect(summary.availableAssets).toBe(5500)
+    expect(summary.restrictedCash).toBe(6500)
+  })
+
+  it('計算時仍相容舊版單一待扣款金額', () => {
+    const summary = calculateSummary({
+      settings: { cashReconciliationEnabled: true },
+      cashDrafts: { 'item-cash': { reservedAmount: 3000 } },
+      items: [
+        { amount: 10000, exchangeRate: 1, currency: 'TWD', assetClass: 'cash', liquidity: 'available', includeInAssets: true, archived: false }
+      ],
+      holdings: []
+    })
+
     expect(summary.reservedCash).toBe(3000)
     expect(summary.availableCash).toBe(7000)
-    expect(summary.availableAssets).toBe(7000)
-    expect(summary.restrictedCash).toBe(5000)
   })
 
   it('替舊版持倉補上可保存的顯示順序', () => {

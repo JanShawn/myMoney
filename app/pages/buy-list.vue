@@ -1,5 +1,9 @@
 <script setup>
 import {Copy, ListChecks, Plus, RefreshCw, RotateCcw, Trash2} from '@lucide/vue'
+import {
+  calculateAdditionalBuyQuantity,
+  calculatePurchasePriceAdvantagePercent,
+} from '~/services/money-domain'
 import {copyStockBuyListFormat} from '~/services/stock-buy-list-export'
 import {useMoneyStore} from '~/stores/money'
 
@@ -12,6 +16,8 @@ const resetDialogOpen = ref(false)
 const pendingDeleteId = ref('')
 const priceDrafts = reactive({})
 const quantityDrafts = reactive({})
+const addOnPriceDrafts = reactive({})
+const targetQuantityDrafts = reactive({})
 const stockQuotes = reactive({})
 const quoteLoading = ref(false)
 const quoteError = ref('')
@@ -23,17 +29,36 @@ const pendingDeleteItem = computed(
     store.stockBuyList.find((item) => item.id === pendingDeleteId.value) ||
     null,
 )
+const displayPrice = (item) => priceDrafts[item.id] ?? item.buyPrice
+const displayQuantity = (item) => quantityDrafts[item.id] ?? item.quantity
+const displayAddOnPrice = (item) =>
+  addOnPriceDrafts[item.id] ?? item.addOnPrice
+const displayTargetQuantity = (item) =>
+  targetQuantityDrafts[item.id] ?? item.targetQuantity
+const isBought = (item) => Number(displayPrice(item)) > 0
 const boughtCount = computed(
-  () => store.stockBuyList.filter((item) => item.bought).length,
+  () => store.stockBuyList.filter((item) => isBought(item)).length,
 )
 const hasDailyData = computed(() =>
   store.stockBuyList.some(
     (item) =>
-      item.bought || Number(item.buyPrice) > 0 || Number(item.quantity) > 0,
+      Number(item.buyPrice) > 0 ||
+      Number(item.quantity) > 0 ||
+      Number(item.addOnPrice) > 0 ||
+      Number(item.targetQuantity) > 0,
   ),
 )
-const displayPrice = (item) => priceDrafts[item.id] ?? item.buyPrice
-const displayQuantity = (item) => quantityDrafts[item.id] ?? item.quantity
+const calculatedAddOnQuantity = (item) =>
+  calculateAdditionalBuyQuantity(
+    displayQuantity(item),
+    displayTargetQuantity(item),
+  )
+const targetQuantityIsInvalid = (item) => {
+  const targetQuantity = Number(displayTargetQuantity(item) || 0)
+  return (
+    targetQuantity > 0 && targetQuantity <= Number(displayQuantity(item) || 0)
+  )
+}
 const latestQuoteDate = computed(
   () =>
     Object.values(stockQuotes)
@@ -52,10 +77,12 @@ const latestQuoteTime = computed(
 )
 const todayTotal = computed(() =>
   store.stockBuyList.reduce((total, item) => {
-    if (!item.bought) return total
+    if (!isBought(item)) return total
     return (
       total +
-      Number(displayPrice(item) || 0) * Number(displayQuantity(item) || 0)
+      Number(displayPrice(item) || 0) * Number(displayQuantity(item) || 0) +
+      Number(displayAddOnPrice(item) || 0) *
+        calculatedAddOnQuantity(item)
     )
   }, 0),
 )
@@ -67,7 +94,26 @@ const money = (value) =>
     maximumFractionDigits: 2,
   }).format(value || 0)
 const priceMoney = (value) => (Number(value) > 0 ? money(value) : '—')
+const quantityText = (value) =>
+  new Intl.NumberFormat('zh-TW', {maximumFractionDigits: 8}).format(
+    Number(value || 0),
+  )
 const quoteFor = (item) => stockQuotes[item.ticker] || null
+const buyVsCurrentPricePercent = (item) =>
+  calculatePurchasePriceAdvantagePercent(
+    displayPrice(item),
+    quoteFor(item)?.currentPrice,
+  )
+const addOnVsBuyPricePercent = (item) =>
+  calculatePurchasePriceAdvantagePercent(
+    displayAddOnPrice(item),
+    displayPrice(item),
+  )
+const addOnVsCurrentPricePercent = (item) =>
+  calculatePurchasePriceAdvantagePercent(
+    displayAddOnPrice(item),
+    quoteFor(item)?.currentPrice,
+  )
 const quoteDate = (value) => String(value || '').replaceAll('-', '/')
 const quoteTime = (value) => {
   if (!value) return ''
@@ -78,22 +124,22 @@ const quoteTime = (value) => {
     hour12: false,
   }).format(new Date(value))
 }
-const priceChangePercent = (currentPrice, basePrice) => {
-  const current = Number(currentPrice)
-  const base = Number(basePrice)
-  return current > 0 && base > 0 ? ((current - base) / base) * 100 : null
-}
 const percentText = (value) => {
   if (!Number.isFinite(value)) return '—'
   if (Math.abs(value) < 0.005) return '0.00%'
   return `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
 }
-const changeTone = (value) =>
+const purchaseComparisonTone = (value) =>
   Number(value) > 0
     ? 'quote-change--positive'
     : Number(value) < 0
       ? 'quote-change--negative'
       : 'quote-change--neutral'
+const purchaseComparisonLabel = (value) => {
+  if (!Number.isFinite(value)) return ''
+  if (Math.abs(value) < 0.005) return '同價'
+  return value > 0 ? '買便宜' : '買貴'
+}
 
 async function refreshBuyListQuotes({force = false, notify = false} = {}) {
   const requestId = ++quoteRequestId
@@ -245,22 +291,36 @@ async function copyStockListFormat() {
   }
 }
 
+const numberDraftsByKey = {
+  buyPrice: priceDrafts,
+  quantity: quantityDrafts,
+  addOnPrice: addOnPriceDrafts,
+  targetQuantity: targetQuantityDrafts,
+}
+const numberFieldLabels = {
+  buyPrice: '買進價格',
+  quantity: '股數',
+  addOnPrice: '加碼價格',
+  targetQuantity: '目標總股數',
+}
+const clearNumberDraft = (itemId, key) => {
+  delete numberDraftsByKey[key]?.[itemId]
+}
+
 async function saveNumber(item, key, value) {
   const number = Number(value || 0)
   if (!Number.isFinite(number) || number < 0) {
     showToast({
       tone: 'error',
       title: '數字沒有保存',
-      message: key === 'buyPrice' ? '買進價格不能小於 0。' : '股數不能小於 0。',
+      message: `${numberFieldLabels[key]}不能小於 0。`,
     })
-    if (key === 'buyPrice') delete priceDrafts[item.id]
-    else delete quantityDrafts[item.id]
+    clearNumberDraft(item.id, key)
     return
   }
   try {
     await store.updateStockBuyListItem(item.id, {[key]: number})
-    if (key === 'buyPrice') delete priceDrafts[item.id]
-    else delete quantityDrafts[item.id]
+    clearNumberDraft(item.id, key)
   } catch (error) {
     store.error = ''
     showToast({
@@ -271,70 +331,54 @@ async function saveNumber(item, key, value) {
   }
 }
 
-async function focusNextStock(item) {
-  const currentIndex = store.stockBuyList.findIndex(
+const buyControlFields = [
+  'price',
+  'quantity',
+  'add-on-price',
+  'target-quantity',
+  'delete',
+]
+const buyControlId = (field, itemId) => {
+  if (field === 'price') return `buy-price-${itemId}`
+  if (field === 'quantity') return `buy-quantity-${itemId}`
+  return `buy-${field}-${itemId}`
+}
+
+async function moveBuyListFocus(item, field, event) {
+  const itemIndex = store.stockBuyList.findIndex(
     (entry) => entry.id === item.id,
   )
-  const nextItem = store.stockBuyList[currentIndex + 1]
-  if (!nextItem) return
+  const fieldIndex = buyControlFields.indexOf(field)
+  if (itemIndex < 0 || fieldIndex < 0) return
+
+  const movingBackward = event.shiftKey
+  let nextItemIndex = itemIndex + (movingBackward ? -1 : 1)
+  let nextFieldIndex = fieldIndex
+
+  if (nextItemIndex < 0 || nextItemIndex >= store.stockBuyList.length) {
+    nextFieldIndex += movingBackward ? -1 : 1
+    if (nextFieldIndex < 0 || nextFieldIndex >= buyControlFields.length) return
+    nextItemIndex = movingBackward ? store.stockBuyList.length - 1 : 0
+  }
+
+  const nextItem = store.stockBuyList[nextItemIndex]
+  const nextField = buyControlFields[nextFieldIndex]
+  event.preventDefault()
   await nextTick()
-  document.getElementById(`buy-price-${nextItem.id}`)?.focus()
-}
-
-async function toggleBought(item, event, focusNext = false) {
-  const bought = event.target.checked
-  const buyPrice = Number(displayPrice(item) || 0)
-  const quantity = Number(displayQuantity(item) || 0)
-  if (bought && (!(buyPrice > 0) || !(quantity > 0))) {
-    event.target.checked = false
-    showToast({
-      tone: 'error',
-      title: '還不能標記為已買進',
-      message: '請先填寫大於 0 的買進價格與股數。',
-    })
-    const missingField = !(buyPrice > 0)
-      ? `buy-price-${item.id}`
-      : `buy-quantity-${item.id}`
-    await nextTick()
-    document.getElementById(missingField)?.focus()
-    return
-  }
-  try {
-    await store.updateStockBuyListItem(item.id, {buyPrice, quantity, bought})
-    delete priceDrafts[item.id]
-    delete quantityDrafts[item.id]
-    if (bought && focusNext) await focusNextStock(item)
-  } catch (error) {
-    event.target.checked = item.bought
-    store.error = ''
-    showToast({
-      tone: 'error',
-      title: '狀態沒有保存',
-      message: error?.message || '無法儲存資料。',
-    })
-  }
-}
-
-async function markBoughtWithEnter(item, event) {
-  if (event.repeat) return
-  if (item.bought) {
-    await focusNextStock(item)
-    return
-  }
-  event.target.checked = true
-  await toggleBought(item, event, true)
+  document.getElementById(buyControlId(nextField, nextItem.id))?.focus()
 }
 
 async function confirmReset() {
   try {
     await store.resetStockBuyListDaily()
-    for (const key of Object.keys(priceDrafts)) delete priceDrafts[key]
-    for (const key of Object.keys(quantityDrafts)) delete quantityDrafts[key]
+    for (const drafts of Object.values(numberDraftsByKey)) {
+      for (const key of Object.keys(drafts)) delete drafts[key]
+    }
     resetDialogOpen.value = false
     showToast({
       tone: 'success',
       title: '今日紀錄已重設',
-      message: '已清除買進價格、股數與 checkbox；股票仍保留在清單中。',
+      message: '已清除買進與加碼的價格及股數；股票仍保留在清單中。',
     })
   } catch (error) {
     store.error = ''
@@ -351,8 +395,9 @@ async function confirmDelete() {
   if (!item) return
   try {
     await store.deleteStockBuyListItem(item.id)
-    delete priceDrafts[item.id]
-    delete quantityDrafts[item.id]
+    for (const key of Object.keys(numberDraftsByKey)) {
+      clearNumberDraft(item.id, key)
+    }
     pendingDeleteId.value = ''
     showToast({
       tone: 'success',
@@ -375,7 +420,7 @@ async function confirmDelete() {
     <PageHeader
       eyebrow="Daily buy list"
       title="股票待買清單"
-      description="每天填入實際買進價格與股數，完成後勾選；股票會持續保留到你主動刪除。"
+      description="填入買進價格即視為已買進；股票與今日買進紀錄都會自動保存在本機。"
     >
       <template #actions>
         <button
@@ -416,7 +461,7 @@ async function confirmDelete() {
       <UiPanel
         class="add-stock-panel"
         title="加入待買股票"
-        description="輸入股票代號即可；每天的價格與股數不會預設保留。"
+        description="輸入股票代號即可；股票與買進紀錄會保留到你主動重設或刪除。"
       >
         <form class="add-stock-form" @submit.prevent="addStock">
           <div class="field">
@@ -446,10 +491,10 @@ async function confirmDelete() {
       </UiPanel>
 
       <UiPanel
-        class="today-buy-panel"
-        flush
-        title="今日買進"
-        description="依股票代號排序；Yahoo Finance 行情每分鐘更新。輸入價格、股數後，Tab 到今日狀態按 Enter 即可完成。"
+      class="today-buy-panel"
+      flush
+      title="今日買進"
+      description="填入買進價格即視為已買進；輸入目標總股數後會算出仍需買幾股。Tab 會依序填完同一欄位。"
       >
         <template #action>
           <div class="buy-summary" aria-live="polite">
@@ -474,75 +519,36 @@ async function confirmDelete() {
         <div v-if="store.stockBuyList.length" class="buy-list-table">
           <div class="buy-list-header" aria-hidden="true">
             <span>股票與行情</span>
-            <span>當時買進價格</span>
-            <span>系統計算股數</span>
-            <span>今日狀態</span>
+            <span>原買進</span>
+            <span>加碼計畫</span>
             <span />
           </div>
           <article
             v-for="item in store.stockBuyList"
             :key="item.id"
             class="buy-row"
-            :class="{'buy-row--done': item.bought}"
+            :class="{'buy-row--done': isBought(item)}"
           >
             <div class="buy-row__identity">
-              <strong>{{ item.ticker }}</strong>
-              <span v-if="item.name">{{ item.name }}</span>
+              <div class="buy-row__stock-title">
+                <strong>{{ item.ticker }}</strong>
+                <span v-if="item.name">{{ item.name }}</span>
+              </div>
               <div v-if="quoteFor(item)" class="buy-row__quote">
                 <small
                   >開盤 {{ priceMoney(quoteFor(item).openPrice) }} · 最新
                   {{ priceMoney(quoteFor(item).currentPrice) }} ·
                   {{ quoteTime(quoteFor(item).quoteTime) }}</small
                 >
-                <div class="quote-comparisons">
-                  <span
-                    :class="
-                      changeTone(
-                        priceChangePercent(
-                          quoteFor(item).currentPrice,
-                          quoteFor(item).openPrice,
-                        ),
-                      )
-                    "
-                  >
-                    較開盤
-                    {{
-                      percentText(
-                        priceChangePercent(
-                          quoteFor(item).currentPrice,
-                          quoteFor(item).openPrice,
-                        ),
-                      )
-                    }}
-                  </span>
-                  <span
-                    :class="
-                      changeTone(
-                        priceChangePercent(
-                          quoteFor(item).currentPrice,
-                          displayPrice(item),
-                        ),
-                      )
-                    "
-                  >
-                    較買進
-                    {{
-                      percentText(
-                        priceChangePercent(
-                          quoteFor(item).currentPrice,
-                          displayPrice(item),
-                        ),
-                      )
-                    }}
-                  </span>
-                </div>
               </div>
               <small v-else class="buy-row__quote-status">{{
                 quoteLoading ? '行情載入中…' : '暫無行情'
               }}</small>
             </div>
 
-            <div class="buy-field buy-field--price">
+            <div class="buy-group buy-group--primary">
+              <strong class="buy-group__title">原買進</strong>
+              <div class="buy-field buy-field--price">
               <label class="buy-field__label" :for="`buy-price-${item.id}`"
                 >買進價格</label
               >
@@ -557,11 +563,26 @@ async function confirmDelete() {
                   placeholder="0"
                   @update:model-value="priceDrafts[item.id] = $event"
                   @change="saveNumber(item, 'buyPrice', $event)"
+                  @keydown.tab="moveBuyListFocus(item, 'price', $event)"
                 />
               </div>
-            </div>
+              <div
+                v-if="quoteFor(item) && Number(displayPrice(item)) > 0"
+                class="price-comparisons"
+              >
+                <small
+                  class="price-comparison"
+                  :class="
+                    purchaseComparisonTone(buyVsCurrentPricePercent(item))
+                  "
+                >
+                  相較現價 {{ percentText(buyVsCurrentPricePercent(item)) }} ·
+                  {{ purchaseComparisonLabel(buyVsCurrentPricePercent(item)) }}
+                </small>
+              </div>
+              </div>
 
-            <div class="buy-field buy-field--quantity">
+              <div class="buy-field buy-field--quantity">
               <label class="buy-field__label" :for="`buy-quantity-${item.id}`"
                 >股數</label
               >
@@ -575,28 +596,109 @@ async function confirmDelete() {
                   placeholder="0"
                   @update:model-value="quantityDrafts[item.id] = $event"
                   @change="saveNumber(item, 'quantity', $event)"
+                  @keydown.tab="moveBuyListFocus(item, 'quantity', $event)"
                 />
                 <span>股</span>
               </div>
+              </div>
             </div>
 
-            <label class="purchase-check">
-              <input
-                type="checkbox"
-                :checked="item.bought"
-                @change="toggleBought(item, $event)"
-                @keydown.enter.prevent="markBoughtWithEnter(item, $event)"
-              />
-              <span>{{ item.bought ? '今日已買進' : '尚未買進' }}</span>
-            </label>
+            <div class="buy-group buy-group--add-on">
+              <strong class="buy-group__title">加碼計畫</strong>
+              <div class="buy-field buy-field--add-on-price">
+              <label
+                class="buy-field__label"
+                :for="`buy-add-on-price-${item.id}`"
+                >加碼價格</label
+              >
+              <div class="number-control">
+                <span>NT$</span>
+                <FormattedNumberInput
+                  :id="`buy-add-on-price-${item.id}`"
+                  class="input input--amount"
+                  :model-value="displayAddOnPrice(item)"
+                  :min="0"
+                  :max-fraction-digits="4"
+                  placeholder="0"
+                  @update:model-value="addOnPriceDrafts[item.id] = $event"
+                  @change="saveNumber(item, 'addOnPrice', $event)"
+                  @keydown.tab="moveBuyListFocus(item, 'add-on-price', $event)"
+                />
+              </div>
+              <div
+                v-if="quoteFor(item) && Number(displayAddOnPrice(item)) > 0"
+                class="price-comparisons"
+              >
+                <small
+                  v-if="Number(displayPrice(item)) > 0"
+                  class="price-comparison"
+                  :class="
+                    purchaseComparisonTone(addOnVsBuyPricePercent(item))
+                  "
+                >
+                  相較原價 {{ percentText(addOnVsBuyPricePercent(item)) }} ·
+                  {{ purchaseComparisonLabel(addOnVsBuyPricePercent(item)) }}
+                </small>
+                <small
+                  class="price-comparison"
+                  :class="
+                    purchaseComparisonTone(addOnVsCurrentPricePercent(item))
+                  "
+                >
+                  相較現價 {{ percentText(addOnVsCurrentPricePercent(item)) }} ·
+                  {{ purchaseComparisonLabel(addOnVsCurrentPricePercent(item)) }}
+                </small>
+              </div>
+              </div>
+
+              <div class="buy-field buy-field--target-quantity">
+              <label
+                class="buy-field__label"
+                :for="`buy-target-quantity-${item.id}`"
+                >目標總購買股數</label
+              >
+              <div class="number-control">
+                <FormattedNumberInput
+                  :id="`buy-target-quantity-${item.id}`"
+                  class="input input--amount"
+                  :model-value="displayTargetQuantity(item)"
+                  :min="0"
+                  :max-fraction-digits="8"
+                  placeholder="0"
+                  @update:model-value="targetQuantityDrafts[item.id] = $event"
+                  @change="saveNumber(item, 'targetQuantity', $event)"
+                  @keydown.tab="moveBuyListFocus(item, 'target-quantity', $event)"
+                />
+                <span>股</span>
+              </div>
+              <small
+                class="add-on-calculation"
+                :class="{
+                  'add-on-calculation--error': targetQuantityIsInvalid(item),
+                }"
+                aria-live="polite"
+              >
+                <template v-if="targetQuantityIsInvalid(item)">
+                  目標需大於 {{ quantityText(displayQuantity(item)) }} 股
+                </template>
+                <template v-else>
+                  需再買
+                  <strong>{{ quantityText(calculatedAddOnQuantity(item)) }}</strong>
+                  股
+                </template>
+              </small>
+              </div>
+            </div>
 
             <button
+              :id="`buy-delete-${item.id}`"
               class="btn btn-ghost btn-icon buy-row__delete"
               type="button"
               :aria-label="`刪除 ${item.ticker}${item.name ? ` ${item.name}` : ''}`"
               @click="pendingDeleteId = item.id"
+              @keydown.tab="moveBuyListFocus(item, 'delete', $event)"
             >
-              <Trash2 :size="17" aria-hidden="true" />
+              <Trash2 :size="16" aria-hidden="true" />
             </button>
           </article>
         </div>
@@ -604,7 +706,7 @@ async function confirmDelete() {
         <EmptyState
           v-else
           title="還沒有待買股票"
-          description="使用左側的加入區建立第一檔股票；之後每天只要填價格、股數並勾選即可。"
+          description="使用左側加入股票；輸入目標總股數後，系統會算出需要加碼的股數。"
         >
           <template #icon
             ><ListChecks :size="22" aria-hidden="true"
@@ -632,7 +734,7 @@ async function confirmDelete() {
       @confirm="confirmReset"
     >
       <p>
-        將清除所有股票的<strong>買進價格、股數與已買進 checkbox</strong
+        將清除所有股票的<strong>買進價格、股數、加碼價格及目標總股數</strong
         >；股票本身會保留在清單中。
       </p>
     </ConfirmDialog>
@@ -683,15 +785,16 @@ async function confirmDelete() {
 }
 .buy-list-table {
   padding-top: 10px;
+  overflow-x: visible;
 }
 .buy-list-header,
 .buy-row {
   display: grid;
   grid-template-columns:
-    minmax(225px, 1.35fr) minmax(145px, 0.75fr) minmax(120px, 0.62fr)
-    minmax(138px, 0.7fr) 38px;
+    minmax(190px, 0.7fr) repeat(2, minmax(280px, 1fr)) 34px;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  min-width: 0;
   padding-inline: 18px;
 }
 .buy-list-header {
@@ -718,9 +821,17 @@ async function confirmDelete() {
   background: color-mix(in srgb, var(--success-soft) 84%, var(--surface));
 }
 .buy-row__identity {
+  grid-column: 1;
   min-width: 0;
   display: grid;
   gap: 3px;
+}
+.buy-row__stock-title {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
 }
 .buy-row__identity strong {
   color: var(--primary);
@@ -746,39 +857,63 @@ async function confirmDelete() {
   font-size: 0.72rem;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
-.quote-comparisons {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
+.price-comparisons {
+  display: grid;
+  gap: 3px;
+  margin-top: 5px;
 }
-.quote-comparisons span {
-  padding: 3px 6px;
-  border-radius: 7px;
-  background: var(--surface-muted);
-  font-size: 0.72rem;
-  font-weight: 760;
+.price-comparison {
+  font-size: 0.67rem;
+  font-weight: 720;
   font-variant-numeric: tabular-nums;
+  line-height: 1.35;
 }
-.quote-comparisons .quote-change--positive {
+.price-comparison.quote-change--positive {
   color: var(--success);
 }
-.quote-comparisons .quote-change--negative {
+.price-comparison.quote-change--negative {
   color: var(--danger);
 }
-.quote-comparisons .quote-change--neutral {
+.price-comparison.quote-change--neutral {
   color: var(--muted);
 }
-.buy-field {
+.buy-group {
   min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-self: stretch;
+  align-items: start;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
 }
-.buy-field__label {
+.buy-group--primary {
+  grid-column: 2;
+}
+.buy-group--add-on {
+  grid-column: 3;
+}
+.buy-group__title {
   position: absolute;
   width: 1px;
   height: 1px;
   overflow: hidden;
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
+}
+.buy-field {
+  min-width: 0;
+}
+.buy-field__label {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--text-soft);
+  font-size: 0.7rem;
+  font-weight: 720;
 }
 .number-control {
   display: flex;
@@ -793,40 +928,29 @@ async function confirmDelete() {
   min-height: 40px;
   padding-block: 7px;
 }
-.purchase-check {
-  min-height: 42px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
+.add-on-calculation {
+  display: block;
+  margin-top: 5px;
   color: var(--muted);
-  cursor: pointer;
+  font-size: 0.7rem;
+  font-weight: 680;
+  font-variant-numeric: tabular-nums;
+}
+.add-on-calculation strong {
+  color: var(--primary);
   font-size: 0.78rem;
-  font-weight: 720;
-  transition:
-    border-color 0.18s,
-    background-color 0.18s,
-    color 0.18s;
 }
-.purchase-check:hover {
-  border-color: var(--control-hover-border);
-}
-.purchase-check input {
-  width: 19px;
-  height: 19px;
-  flex: 0 0 auto;
-  margin: 0;
-  accent-color: var(--success);
-  cursor: pointer;
-}
-.buy-row--done .purchase-check {
-  border-color: var(--success-border);
-  color: var(--success);
+.add-on-calculation--error {
+  color: var(--danger);
 }
 .buy-row__delete {
+  grid-column: 4;
+  grid-row: 1;
+  width: 30px;
+  min-width: 30px;
+  min-height: 30px;
+  justify-self: center;
+  align-self: center;
   color: var(--danger);
 }
 .spin {
@@ -838,7 +962,7 @@ async function confirmDelete() {
   }
 }
 
-@media (max-width: 1100px) {
+@media (max-width: 1500px) {
   .buy-list-workspace {
     grid-template-columns: 1fr;
   }
@@ -854,7 +978,7 @@ async function confirmDelete() {
   }
 }
 
-@media (max-width: 760px) {
+@media (max-width: 1200px) {
   .buy-summary {
     justify-content: flex-start;
   }
@@ -865,11 +989,17 @@ async function confirmDelete() {
     display: grid;
     gap: 10px;
     padding: 10px;
+    overflow-x: visible;
   }
   .buy-row {
-    grid-template-columns: minmax(0, 1fr) 38px;
-    grid-template-areas: 'identity delete' 'price price' 'quantity quantity' 'status status';
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'identity'
+      'primary'
+      'add-on'
+      'delete';
     gap: 10px;
+    min-width: 0;
     min-height: 0;
     padding: 13px;
     border: 1px solid var(--border);
@@ -885,33 +1015,45 @@ async function confirmDelete() {
   }
   .buy-row__delete {
     grid-area: delete;
+    justify-self: end;
   }
-  .buy-field--price {
-    grid-area: price;
+  .buy-group--primary {
+    grid-area: primary;
   }
-  .buy-field--quantity {
-    grid-area: quantity;
+  .buy-group--add-on {
+    grid-area: add-on;
   }
-  .buy-field__label {
+  .buy-group__title {
     position: static;
     width: auto;
     height: auto;
-    display: block;
-    margin-bottom: 5px;
+    grid-column: 1 / -1;
     overflow: visible;
     clip: auto;
-    color: var(--text-soft);
-    font-size: 0.76rem;
-    font-weight: 720;
+    color: var(--text);
+    font-size: 0.78rem;
     white-space: normal;
   }
-  .purchase-check {
-    grid-area: status;
-    justify-content: center;
+  .buy-field__label {
+    font-size: 0.76rem;
   }
 }
 
 @media (max-width: 620px) {
+  .today-buy-panel :deep(.panel__header) {
+    flex-direction: column;
+  }
+  .today-buy-panel :deep(.panel__action),
+  .buy-summary {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .buy-group {
+    grid-template-columns: 1fr;
+  }
+  .buy-group__title {
+    grid-column: auto;
+  }
   .add-stock-form {
     grid-template-columns: 1fr;
   }

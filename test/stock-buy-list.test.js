@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { compareStockTickers, createDefaultConfig, normalizeConfig } from '../app/services/money-domain'
+import { calculateAdditionalBuyQuantity, calculatePriceDifferencePercent, calculatePurchasePriceAdvantagePercent, compareStockTickers, createDefaultConfig, normalizeConfig } from '../app/services/money-domain'
 import { summarizeConfigChanges } from '../app/services/local-json-storage'
 import { createStockBuyListFormat } from '../app/services/stock-buy-list-export'
 
@@ -55,27 +55,48 @@ describe('股票待買清單', () => {
     expect(tickers.sort(compareStockTickers)).toEqual(['0050', '006208', '00632R', '2330'])
   })
 
-  it('會正規化並保留每日買進資料', () => {
+  it('會用目標總股數算出仍需買進的股數', () => {
+    expect(calculateAdditionalBuyQuantity(100, 150)).toBe(50)
+    expect(calculateAdditionalBuyQuantity(100, 100)).toBe(0)
+    expect(calculateAdditionalBuyQuantity(100, 80)).toBe(0)
+  })
+
+  it('會計算輸入價格相對參考價格的差異', () => {
+    expect(calculatePriceDifferencePercent(110, 100)).toBeCloseTo(10)
+    expect(calculatePriceDifferencePercent(90, 100)).toBeCloseTo(-10)
+    expect(calculatePriceDifferencePercent(100, 100)).toBe(0)
+  })
+
+  it('買貴顯示負值，買便宜顯示正值', () => {
+    expect(calculatePurchasePriceAdvantagePercent(110, 100)).toBeCloseTo(-10)
+    expect(calculatePurchasePriceAdvantagePercent(90, 100)).toBeCloseTo(10)
+    expect(calculatePurchasePriceAdvantagePercent(100, 100)).toBe(0)
+  })
+
+  it('會正規化並保留每日買進資料，買進狀態由價格判斷', () => {
     const config = normalizeConfig({
-      version: 7,
+      version: 8,
       stockBuyList: [{
         id: 'buy-1',
         ticker: ' 2330 ',
         name: ' 台積電 ',
         buyPrice: 1250.5,
         quantity: 10,
+        addOnPrice: 1275,
+        targetQuantity: 15,
         bought: true
       }]
     })
 
-    expect(config.version).toBe(8)
+    expect(config.version).toBe(11)
     expect(config.stockBuyList).toEqual([{
       id: 'buy-1',
       ticker: '2330',
       name: '台積電',
       buyPrice: 1250.5,
       quantity: 10,
-      bought: true,
+      addOnPrice: 1275,
+      targetQuantity: 15,
       order: 0
     }])
   })
@@ -88,15 +109,33 @@ describe('股票待買清單', () => {
       name: '台積電',
       buyPrice: 600,
       quantity: 10,
-      bought: true,
+      addOnPrice: 620,
+      targetQuantity: 15,
       order: 0
     })
     const after = structuredClone(before)
-    Object.assign(after.stockBuyList[0], { buyPrice: 0, quantity: 0, bought: false })
+    Object.assign(after.stockBuyList[0], {
+      buyPrice: 0,
+      quantity: 0,
+      addOnPrice: 0,
+      targetQuantity: 0
+    })
 
     expect(after.stockBuyList[0]).toMatchObject({ ticker: '2330', name: '台積電' })
     expect(summarizeConfigChanges(before, after)).toEqual([
-      '待買股票「2330 台積電」：買進價格 600 → 0、股數 10 → 0、取消今日買進'
+      '待買股票「2330 台積電」：買進價格 600 → 0、股數 10 → 0、加碼價格 620 → 0、目標總股數 15 → 0'
     ])
+  })
+
+  it('舊資料沒有加碼與目標欄位時會補為 0', () => {
+    const config = normalizeConfig({
+      version: 8,
+      stockBuyList: [{ id: 'buy-1', ticker: '0050', buyPrice: 50, quantity: 20 }]
+    })
+
+    expect(config.stockBuyList[0]).toMatchObject({
+      addOnPrice: 0,
+      targetQuantity: 0
+    })
   })
 })

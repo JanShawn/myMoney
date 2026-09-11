@@ -13,7 +13,7 @@ describe('snapshot storage', () => {
 
   it('舊版資料會補上靜態架構需要的 snapshots', () => {
     const config = normalizeConfig({ version: 1, groups: [], items: [], holdings: [] })
-    expect(config.version).toBe(8)
+    expect(config.version).toBe(11)
     expect(config.snapshots).toEqual([])
     expect(config.cashDrafts).toEqual({})
     expect(config.settings.snapshotDisplayLimit).toBe(30)
@@ -74,7 +74,7 @@ describe('snapshot storage', () => {
       ] } }
     })
     expect(config.cashDrafts).toEqual({
-      cash: { expectedAmount: 100, reservedAmount: 30, rows: [
+      cash: { expectedAmount: 100, reservations: [{ label: '待扣款／保留款', amount: 30 }], rows: [
         { label: '零錢', operation: 'add', amount: 25 },
         { label: '代墊', operation: 'subtract', amount: 10 },
         { label: '舊版扣除', operation: 'subtract', amount: 5 }
