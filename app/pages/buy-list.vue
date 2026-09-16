@@ -73,46 +73,82 @@ const money = (value) =>
   }).format(value || 0)
 const priceMoney = (value) => (Number(value) > 0 ? money(value) : '—')
 const quoteFor = (item) => stockQuotes[item.ticker] || null
-const priceGapWarningPercent = 1
 const estimatedNetAssetValue = (item) =>
   Number(quoteFor(item)?.estimatedNetAssetValue) > 0
     ? Number(quoteFor(item).estimatedNetAssetValue)
     : null
 const nearestNetPrice = (item) =>
   calculateNearestTaiwanOrderPrice(estimatedNetAssetValue(item), item.ticker)
+const oddLotAskPrice = (item) =>
+  Number(quoteFor(item)?.oddLotAskPrice) > 0
+    ? Number(quoteFor(item).oddLotAskPrice)
+    : null
+const oddLotTradePrice = (item) =>
+  Number(quoteFor(item)?.oddLotPrice) > 0
+    ? Number(quoteFor(item).oddLotPrice)
+    : null
 const oddLotBuyPrice = (item) => {
-  const quote = quoteFor(item)
-  return (
-    [quote?.oddLotAskPrice, quote?.oddLotPrice].find(
-      (value) => Number(value) > 0,
-    ) || null
-  )
+  return oddLotAskPrice(item) ?? oddLotTradePrice(item)
 }
-const estimatedUnitPrice = (item) => {
+const referenceLimitPrice = (item) => {
   const quote = quoteFor(item)
-  return oddLotBuyPrice(item) ?? (Number(quote?.currentPrice) > 0 ? quote.currentPrice : null)
+  const netPrice = nearestNetPrice(item)
+  const askPrice = oddLotAskPrice(item)
+  if (netPrice != null && askPrice != null) return Math.min(netPrice, askPrice)
+  return (
+    netPrice ??
+    askPrice ??
+    oddLotTradePrice(item) ??
+    (Number(quote?.regularMarketPrice) > 0 ? Number(quote.regularMarketPrice) : null)
+  )
 }
 const referenceDifferencePercent = (item) =>
   calculatePriceDifferencePercent(
     oddLotBuyPrice(item),
     estimatedNetAssetValue(item) ?? quoteFor(item)?.regularMarketPrice,
   )
-const referenceDifferenceLabel = (item) =>
-  estimatedNetAssetValue(item) != null
-    ? '零股價格相較淨價'
-    : '零股價格相較整股'
-const priceGapIsLarge = (item) =>
-  Math.abs(referenceDifferencePercent(item)) >= priceGapWarningPercent
-const estimatedPriceBasis = (item) => {
-  const quote = quoteFor(item)
-  if (Number(quote?.oddLotAskPrice) > 0) return '零股最低賣價'
-  if (Number(quote?.oddLotPrice) > 0) return '零股最新成交價'
-  if (Number(quote?.currentPrice) > 0) return '整股現價 fallback'
-  return ''
+const absolutePercentText = (value) =>
+  Number.isFinite(value) ? `${Math.abs(value).toFixed(2)}%` : '—'
+const priceSignalText = (item) => {
+  const difference = referenceDifferencePercent(item)
+  if (!Number.isFinite(difference)) return ''
+  if (estimatedNetAssetValue(item) == null) {
+    return `較整股 ${percentText(difference)}`
+  }
+  if (Math.abs(difference) < 0.005) return '貼近淨值'
+  return difference > 0
+    ? `零股溢價 ${absolutePercentText(difference)}`
+    : `零股折價 ${absolutePercentText(difference)}`
+}
+const priceSignalTone = (item) => {
+  const difference = referenceDifferencePercent(item)
+  if (!Number.isFinite(difference)) return 'price-signal--neutral'
+  if (estimatedNetAssetValue(item) == null) {
+    return Math.abs(difference) >= 1
+      ? 'price-signal--danger'
+      : 'price-signal--neutral'
+  }
+  if (difference >= 1) return 'price-signal--danger'
+  if (difference >= 0.5) return 'price-signal--warning'
+  if (difference <= 0) return 'price-signal--good'
+  return 'price-signal--neutral'
+}
+const referenceLimitNote = (item) => {
+  const askPrice = oddLotAskPrice(item)
+  const netPrice = nearestNetPrice(item)
+  if (netPrice != null && askPrice != null) {
+    return askPrice > netPrice
+      ? `低於目前賣價 ${priceMoney(askPrice)}，可能需等待`
+      : '目前零股賣價未高於淨值參考'
+  }
+  if (netPrice != null) return '依淨值換算，不保證立即成交'
+  if (askPrice != null) return '依目前零股賣價，行情可能變動'
+  if (oddLotTradePrice(item) != null) return '依最新零股成交價，僅供參考'
+  return '依整股行情估算，請確認零股委託簿'
 }
 const estimatedAmount = (item) => {
   const quantity = Number(displayQuantity(item) || 0)
-  const price = estimatedUnitPrice(item)
+  const price = referenceLimitPrice(item)
   return quantity > 0 && price > 0 ? quantity * price : null
 }
 const estimatedTotal = computed(() =>
@@ -129,8 +165,10 @@ const displayOrderPrice = (value) =>
 const buyVsCurrentPricePercent = (item) =>
   calculatePurchasePriceAdvantagePercent(
     displayPrice(item),
-    estimatedUnitPrice(item),
+    estimatedNetAssetValue(item) ?? quoteFor(item)?.regularMarketPrice,
   )
+const purchaseComparisonReferenceLabel = (item) =>
+  estimatedNetAssetValue(item) != null ? '淨值' : '整股行情'
 const quoteDate = (value) => String(value || '').replaceAll('-', '/')
 const quoteTime = (value) => {
   if (!value) return ''
@@ -556,7 +594,7 @@ async function confirmDelete() {
       class="today-buy-panel"
       flush
       title="今日買進"
-      description="填入股數即可依盤中零股行情估算金額；ETF iNAV 會由官方資料自動更新。"
+      description="先確認零股溢價，再用參考限價估算掛單金額；ETF 淨值會由官方資料自動更新。"
       >
         <template #action>
           <div class="buy-summary" aria-live="polite">
@@ -568,7 +606,7 @@ async function confirmDelete() {
               >{{ boughtCount }} / {{ store.stockBuyList.length }} 已成交</span
             >
             <span v-if="estimatedTotal > 0" class="pill pill-neutral"
-              >零股預估 {{ money(estimatedTotal) }}</span
+              >掛單預估 {{ money(estimatedTotal) }}</span
             >
             <span class="pill">今日合計 {{ money(todayTotal) }}</span>
           </div>
@@ -581,15 +619,16 @@ async function confirmDelete() {
           >{{ quoteError }}</AppNotice
         >
         <p v-if="store.stockBuyList.length" class="estimate-disclaimer">
-          預估金額不含券商手續費；優先使用零股最低賣價，沒有賣方掛單時才參考最新成交價。
+          參考限價不代表保證成交：ETF 取淨值對應價與目前零股賣價較低者，非 ETF
+          則優先參考零股賣價。預估金額不含券商手續費。
         </p>
 
         <div v-if="store.stockBuyList.length" class="buy-list-table">
           <div class="buy-list-header" aria-hidden="true">
-            <span>股票與行情</span>
-            <span>股數</span>
-            <span>淨價</span>
-            <span>買進價格</span>
+            <span>股票</span>
+            <span>參考限價</span>
+            <span>股數與預估</span>
+            <span>實際成交價</span>
             <span>已成交</span>
             <span />
           </div>
@@ -605,30 +644,48 @@ async function confirmDelete() {
                 <span v-if="item.name">{{ item.name }}</span>
               </div>
               <div v-if="quoteFor(item)" class="buy-row__quote">
-                <small
-                  >整股 {{ priceMoney(quoteFor(item).regularMarketPrice) }} · 零股成交
-                  {{ priceMoney(quoteFor(item).oddLotPrice) }} · 零股賣價
-                  {{ priceMoney(quoteFor(item).oddLotAskPrice) }}</small
-                >
-                <small
-                  v-if="Number.isFinite(referenceDifferencePercent(item))"
-                  class="odd-lot-gap"
-                  :class="{'odd-lot-gap--warning': priceGapIsLarge(item)}"
-                >
-                  {{ referenceDifferenceLabel(item) }}
-                  {{ percentText(referenceDifferencePercent(item)) }}
-                  <template v-if="priceGapIsLarge(item)"> · 差異超過 1%</template>
-                  · {{ quoteTime(quoteFor(item).oddLotQuoteTime) }}
+                <small class="buy-row__quote-primary">
+                  零股賣價 {{ priceMoney(oddLotAskPrice(item)) }} ·
+                  {{ quoteTime(quoteFor(item).oddLotQuoteTime) }}
                 </small>
+                <details class="market-details">
+                  <summary>行情明細</summary>
+                  <small>
+                    零股成交 {{ priceMoney(oddLotTradePrice(item)) }} · 整股
+                    {{ priceMoney(quoteFor(item).regularMarketPrice) }}
+                  </small>
+                </details>
               </div>
               <small v-else class="buy-row__quote-status">{{
                 quoteLoading ? '行情載入中…' : '暫無行情'
               }}</small>
             </div>
 
+            <div class="buy-field buy-field--reference-price">
+              <span class="buy-field__heading">參考限價</span>
+              <div v-if="referenceLimitPrice(item) != null" class="limit-price">
+                <div class="limit-price__primary">
+                  <strong>NT$ {{ displayOrderPrice(referenceLimitPrice(item)) }}</strong>
+                  <span
+                    v-if="priceSignalText(item)"
+                    class="price-signal"
+                    :class="priceSignalTone(item)"
+                  >
+                    {{ priceSignalText(item) }}
+                  </span>
+                </div>
+                <small>{{ referenceLimitNote(item) }}</small>
+                <small v-if="estimatedNetAssetValue(item) != null" class="limit-price__nav">
+                  淨值 {{ priceMoney(estimatedNetAssetValue(item)) }} ·
+                  {{ quoteTime(quoteFor(item).navQuoteTime) }}
+                </small>
+              </div>
+              <small v-else class="market-readout__empty">目前無法估算</small>
+            </div>
+
             <div class="buy-field buy-field--quantity">
               <label class="buy-field__label" :for="`buy-quantity-${item.id}`"
-                >股數</label
+                >股數與預估</label
               >
               <div class="number-control">
                 <FormattedNumberInput
@@ -650,34 +707,13 @@ async function confirmDelete() {
                 class="buy-estimate"
                 aria-live="polite"
               >
-                預估 {{ money(estimatedAmount(item)) }} ·
-                {{ estimatedPriceBasis(item) }}
-              </small>
-            </div>
-
-            <div class="buy-field buy-field--net-price">
-              <span class="buy-field__heading">淨價</span>
-              <div v-if="estimatedNetAssetValue(item) != null" class="market-readout">
-                <strong>{{ priceMoney(estimatedNetAssetValue(item)) }}</strong>
-                <small>
-                  資料時間 {{ quoteTime(quoteFor(item).navQuoteTime) }}
-                </small>
-              </div>
-              <small v-else class="market-readout__empty"
-                >非 ETF 或目前未提供</small
-              >
-              <small
-                v-if="nearestNetPrice(item) != null"
-                class="net-price-suggestion"
-                aria-live="polite"
-              >
-                可下單價：NT$ {{ displayOrderPrice(nearestNetPrice(item)) }}
+                參考金額 {{ money(estimatedAmount(item)) }}
               </small>
             </div>
 
             <div class="buy-field buy-field--price">
               <label class="buy-field__label" :for="`buy-price-${item.id}`"
-                >買進價格</label
+                >實際成交價</label
               >
               <div class="number-control">
                 <span>NT$</span>
@@ -705,7 +741,8 @@ async function confirmDelete() {
                     purchaseComparisonTone(buyVsCurrentPricePercent(item))
                   "
                 >
-                  相較零股估算價 {{ percentText(buyVsCurrentPricePercent(item)) }} ·
+                  相較{{ purchaseComparisonReferenceLabel(item) }}
+                  {{ percentText(buyVsCurrentPricePercent(item)) }} ·
                   {{ purchaseComparisonLabel(buyVsCurrentPricePercent(item)) }}
                 </small>
               </div>
@@ -830,7 +867,7 @@ async function confirmDelete() {
 .buy-row {
   display: grid;
   grid-template-columns:
-    minmax(190px, 0.9fr) repeat(3, minmax(145px, 0.55fr)) minmax(82px, auto) 34px;
+    minmax(175px, 0.8fr) minmax(210px, 0.85fr) repeat(2, minmax(145px, 0.55fr)) minmax(82px, auto) 34px;
   align-items: center;
   gap: 10px;
   min-width: 0;
@@ -898,13 +935,27 @@ async function confirmDelete() {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.buy-row__quote .odd-lot-gap {
-  color: var(--text-soft);
-  white-space: normal;
+.buy-row__quote-primary {
+  color: var(--text-soft) !important;
 }
-.buy-row__quote .odd-lot-gap--warning {
-  color: var(--danger);
-  font-weight: 780;
+.market-details {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 650;
+}
+.market-details summary {
+  width: fit-content;
+  cursor: pointer;
+  user-select: none;
+}
+.market-details summary:hover {
+  color: var(--primary);
+}
+.market-details small {
+  display: block;
+  margin-top: 4px;
+  font-size: inherit;
+  font-variant-numeric: tabular-nums;
 }
 .price-comparisons {
   display: grid;
@@ -934,10 +985,12 @@ async function confirmDelete() {
   border-radius: var(--radius-sm);
   background: var(--surface-muted);
 }
-.buy-field--quantity {
+.buy-field--reference-price {
   grid-column: 2;
+  border-color: color-mix(in srgb, var(--primary) 28%, var(--border)) !important;
+  background: color-mix(in srgb, var(--primary) 5%, var(--surface)) !important;
 }
-.buy-field--net-price {
+.buy-field--quantity {
   grid-column: 3;
 }
 .buy-field--price {
@@ -991,34 +1044,70 @@ async function confirmDelete() {
   min-height: 40px;
   padding-block: 7px;
 }
-.buy-estimate,
-.net-price-suggestion {
+.buy-estimate {
   display: block;
   margin-top: 5px;
-  color: var(--primary);
+  color: var(--text-soft);
   font-size: 0.72rem;
   font-weight: 720;
   font-variant-numeric: tabular-nums;
 }
-.buy-estimate {
-  color: var(--text-soft);
-}
-.market-readout {
+.limit-price {
   display: grid;
-  gap: 3px;
+  gap: 5px;
   min-height: 40px;
 }
-.market-readout strong {
-  color: var(--text);
-  font-size: 0.95rem;
+.limit-price__primary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.limit-price strong {
+  color: var(--primary);
+  font-size: 1rem;
   font-variant-numeric: tabular-nums;
 }
-.market-readout small,
+.limit-price small,
 .market-readout__empty {
   color: var(--muted);
   font-size: 0.68rem;
   font-weight: 650;
   line-height: 1.35;
+}
+.limit-price__nav {
+  color: var(--text-soft) !important;
+}
+.price-signal {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.66rem;
+  font-weight: 780;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.price-signal--good {
+  border-color: var(--success-border);
+  background: var(--success-soft);
+  color: var(--success);
+}
+.price-signal--warning {
+  border-color: var(--warning-border);
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.price-signal--danger {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.price-signal--neutral {
+  background: var(--surface);
+  color: var(--text-soft);
 }
 .market-readout__empty {
   display: block;
@@ -1077,7 +1166,7 @@ async function confirmDelete() {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     grid-template-areas:
       'identity identity delete'
-      'quantity net-price price'
+      'reference quantity price'
       'bought bought bought';
     gap: 10px;
     min-width: 0;
@@ -1098,11 +1187,11 @@ async function confirmDelete() {
     grid-area: delete;
     justify-self: end;
   }
+  .buy-field--reference-price {
+    grid-area: reference;
+  }
   .buy-field--quantity {
     grid-area: quantity;
-  }
-  .buy-field--net-price {
-    grid-area: net-price;
   }
   .buy-field--price {
     grid-area: price;
@@ -1140,8 +1229,8 @@ async function confirmDelete() {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
       'identity'
+      'reference'
       'quantity'
-      'net-price'
       'price'
       'bought'
       'delete';
