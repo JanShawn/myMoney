@@ -73,32 +73,40 @@ const money = (value) =>
   }).format(value || 0)
 const priceMoney = (value) => (Number(value) > 0 ? money(value) : '—')
 const quoteFor = (item) => stockQuotes[item.ticker] || null
-const oddLotGapWarningPercent = 1
-const oddLotDifferencePercent = (item) =>
-  calculatePriceDifferencePercent(
-    quoteFor(item)?.oddLotPrice,
-    quoteFor(item)?.regularMarketPrice,
-  )
-const oddLotGapIsLarge = (item) =>
-  Math.abs(oddLotDifferencePercent(item)) >= oddLotGapWarningPercent
+const priceGapWarningPercent = 1
 const estimatedNetAssetValue = (item) =>
   Number(quoteFor(item)?.estimatedNetAssetValue) > 0
     ? Number(quoteFor(item).estimatedNetAssetValue)
     : null
 const nearestNetPrice = (item) =>
   calculateNearestTaiwanOrderPrice(estimatedNetAssetValue(item), item.ticker)
-const estimatedUnitPrice = (item) => {
+const oddLotBuyPrice = (item) => {
   const quote = quoteFor(item)
   return (
-    [quote?.oddLotPrice, quote?.oddLotAskPrice, quote?.currentPrice].find(
+    [quote?.oddLotAskPrice, quote?.oddLotPrice].find(
       (value) => Number(value) > 0,
     ) || null
   )
 }
+const estimatedUnitPrice = (item) => {
+  const quote = quoteFor(item)
+  return oddLotBuyPrice(item) ?? (Number(quote?.currentPrice) > 0 ? quote.currentPrice : null)
+}
+const referenceDifferencePercent = (item) =>
+  calculatePriceDifferencePercent(
+    oddLotBuyPrice(item),
+    estimatedNetAssetValue(item) ?? quoteFor(item)?.regularMarketPrice,
+  )
+const referenceDifferenceLabel = (item) =>
+  estimatedNetAssetValue(item) != null
+    ? '零股價格相較淨價'
+    : '零股價格相較整股'
+const priceGapIsLarge = (item) =>
+  Math.abs(referenceDifferencePercent(item)) >= priceGapWarningPercent
 const estimatedPriceBasis = (item) => {
   const quote = quoteFor(item)
+  if (Number(quote?.oddLotAskPrice) > 0) return '零股最低賣價'
   if (Number(quote?.oddLotPrice) > 0) return '零股最新成交價'
-  if (Number(quote?.oddLotAskPrice) > 0) return '零股最佳賣價'
   if (Number(quote?.currentPrice) > 0) return '整股現價 fallback'
   return ''
 }
@@ -573,14 +581,14 @@ async function confirmDelete() {
           >{{ quoteError }}</AppNotice
         >
         <p v-if="store.stockBuyList.length" class="estimate-disclaimer">
-          預估金額不含券商手續費；優先使用零股最新成交價，無成交時依最佳賣價估算。
+          預估金額不含券商手續費；優先使用零股最低賣價，沒有賣方掛單時才參考最新成交價。
         </p>
 
         <div v-if="store.stockBuyList.length" class="buy-list-table">
           <div class="buy-list-header" aria-hidden="true">
             <span>股票與行情</span>
             <span>股數</span>
-            <span>官方 iNAV</span>
+            <span>淨價</span>
             <span>買進價格</span>
             <span>已成交</span>
             <span />
@@ -599,16 +607,17 @@ async function confirmDelete() {
               <div v-if="quoteFor(item)" class="buy-row__quote">
                 <small
                   >整股 {{ priceMoney(quoteFor(item).regularMarketPrice) }} · 零股成交
-                  {{ priceMoney(quoteFor(item).oddLotPrice) }} · 最佳賣
+                  {{ priceMoney(quoteFor(item).oddLotPrice) }} · 零股賣價
                   {{ priceMoney(quoteFor(item).oddLotAskPrice) }}</small
                 >
                 <small
-                  v-if="Number.isFinite(oddLotDifferencePercent(item))"
+                  v-if="Number.isFinite(referenceDifferencePercent(item))"
                   class="odd-lot-gap"
-                  :class="{'odd-lot-gap--warning': oddLotGapIsLarge(item)}"
+                  :class="{'odd-lot-gap--warning': priceGapIsLarge(item)}"
                 >
-                  零股相較整股 {{ percentText(oddLotDifferencePercent(item)) }}
-                  <template v-if="oddLotGapIsLarge(item)"> · 差異超過 1%</template>
+                  {{ referenceDifferenceLabel(item) }}
+                  {{ percentText(referenceDifferencePercent(item)) }}
+                  <template v-if="priceGapIsLarge(item)"> · 差異超過 1%</template>
                   · {{ quoteTime(quoteFor(item).oddLotQuoteTime) }}
                 </small>
               </div>
@@ -647,13 +656,11 @@ async function confirmDelete() {
             </div>
 
             <div class="buy-field buy-field--net-price">
-              <span class="buy-field__heading">官方 iNAV</span>
+              <span class="buy-field__heading">淨價</span>
               <div v-if="estimatedNetAssetValue(item) != null" class="market-readout">
                 <strong>{{ priceMoney(estimatedNetAssetValue(item)) }}</strong>
                 <small>
-                  折溢價
-                  {{ percentText(quoteFor(item).premiumDiscountPercent) }} ·
-                  {{ quoteTime(quoteFor(item).navQuoteTime) }}
+                  資料時間 {{ quoteTime(quoteFor(item).navQuoteTime) }}
                 </small>
               </div>
               <small v-else class="market-readout__empty"
@@ -664,7 +671,7 @@ async function confirmDelete() {
                 class="net-price-suggestion"
                 aria-live="polite"
               >
-                最接近可下單價：NT$ {{ displayOrderPrice(nearestNetPrice(item)) }}
+                可下單價：NT$ {{ displayOrderPrice(nearestNetPrice(item)) }}
               </small>
             </div>
 
@@ -959,7 +966,8 @@ async function confirmDelete() {
 .buy-field {
   min-width: 0;
 }
-.buy-field__label {
+.buy-field__label,
+.buy-field__heading {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -969,13 +977,6 @@ async function confirmDelete() {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
-}
-.buy-field__heading {
-  display: block;
-  margin-bottom: 5px;
-  color: var(--text-soft);
-  font-size: 0.7rem;
-  font-weight: 720;
 }
 .number-control {
   display: flex;
@@ -1110,7 +1111,8 @@ async function confirmDelete() {
     grid-area: bought;
     justify-self: start;
   }
-  .buy-field__label {
+  .buy-field__label,
+  .buy-field__heading {
     position: static;
     display: block;
     width: auto;
