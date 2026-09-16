@@ -152,8 +152,7 @@ export function summarizeConfigChanges(beforeInput, afterInput) {
     if (previous.ticker !== item.ticker || previous.name !== item.name) details.push(`名稱或代號改為「${label}」`)
     if (Number(previous.buyPrice || 0) !== Number(item.buyPrice || 0)) details.push(`買進價格 ${formatChangedNumber(previous.buyPrice)} → ${formatChangedNumber(item.buyPrice)}`)
     if (Number(previous.quantity || 0) !== Number(item.quantity || 0)) details.push(`股數 ${formatChangedNumber(previous.quantity)} → ${formatChangedNumber(item.quantity)}`)
-    if (Number(previous.addOnPrice || 0) !== Number(item.addOnPrice || 0)) details.push(`加碼價格 ${formatChangedNumber(previous.addOnPrice)} → ${formatChangedNumber(item.addOnPrice)}`)
-    if (Number(previous.targetQuantity || 0) !== Number(item.targetQuantity || 0)) details.push(`目標總股數 ${formatChangedNumber(previous.targetQuantity)} → ${formatChangedNumber(item.targetQuantity)}`)
+    if (Boolean(previous.bought) !== Boolean(item.bought)) details.push(`已成交 ${previous.bought ? '是' : '否'} → ${item.bought ? '是' : '否'}`)
     if (Number(previous.order || 0) !== Number(item.order || 0)) details.push('調整顯示順序')
     if (details.length) changes.push(`待買股票「${label}」：${details.join('、')}`)
   }

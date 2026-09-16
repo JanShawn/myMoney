@@ -1,7 +1,8 @@
 <script setup>
 import {Copy, ListChecks, Plus, RefreshCw, RotateCcw, Trash2} from '@lucide/vue'
 import {
-  calculateAdditionalBuyQuantity,
+  calculateNearestTaiwanOrderPrice,
+  calculatePriceDifferencePercent,
   calculatePurchasePriceAdvantagePercent,
 } from '~/services/money-domain'
 import {copyStockBuyListFormat} from '~/services/stock-buy-list-export'
@@ -16,8 +17,6 @@ const resetDialogOpen = ref(false)
 const pendingDeleteId = ref('')
 const priceDrafts = reactive({})
 const quantityDrafts = reactive({})
-const addOnPriceDrafts = reactive({})
-const targetQuantityDrafts = reactive({})
 const stockQuotes = reactive({})
 const quoteLoading = ref(false)
 const quoteError = ref('')
@@ -31,11 +30,7 @@ const pendingDeleteItem = computed(
 )
 const displayPrice = (item) => priceDrafts[item.id] ?? item.buyPrice
 const displayQuantity = (item) => quantityDrafts[item.id] ?? item.quantity
-const displayAddOnPrice = (item) =>
-  addOnPriceDrafts[item.id] ?? item.addOnPrice
-const displayTargetQuantity = (item) =>
-  targetQuantityDrafts[item.id] ?? item.targetQuantity
-const isBought = (item) => Number(displayPrice(item)) > 0
+const isBought = (item) => Boolean(item.bought)
 const boughtCount = computed(
   () => store.stockBuyList.filter((item) => isBought(item)).length,
 )
@@ -44,25 +39,13 @@ const hasDailyData = computed(() =>
     (item) =>
       Number(item.buyPrice) > 0 ||
       Number(item.quantity) > 0 ||
-      Number(item.addOnPrice) > 0 ||
-      Number(item.targetQuantity) > 0,
+      item.bought,
   ),
 )
-const calculatedAddOnQuantity = (item) =>
-  calculateAdditionalBuyQuantity(
-    displayQuantity(item),
-    displayTargetQuantity(item),
-  )
-const targetQuantityIsInvalid = (item) => {
-  const targetQuantity = Number(displayTargetQuantity(item) || 0)
-  return (
-    targetQuantity > 0 && targetQuantity <= Number(displayQuantity(item) || 0)
-  )
-}
 const latestQuoteDate = computed(
   () =>
     Object.values(stockQuotes)
-      .map((quote) => quote.marketDate)
+      .map((quote) => quote.oddLotMarketDate || quote.navMarketDate || quote.marketDate)
       .filter(Boolean)
       .sort()
       .at(-1) || '',
@@ -70,7 +53,7 @@ const latestQuoteDate = computed(
 const latestQuoteTime = computed(
   () =>
     Object.values(stockQuotes)
-      .map((quote) => quote.quoteTime)
+      .map((quote) => quote.oddLotQuoteTime || quote.navQuoteTime || quote.quoteTime)
       .filter(Boolean)
       .sort()
       .at(-1) || '',
@@ -78,12 +61,7 @@ const latestQuoteTime = computed(
 const todayTotal = computed(() =>
   store.stockBuyList.reduce((total, item) => {
     if (!isBought(item)) return total
-    return (
-      total +
-      Number(displayPrice(item) || 0) * Number(displayQuantity(item) || 0) +
-      Number(displayAddOnPrice(item) || 0) *
-        calculatedAddOnQuantity(item)
-    )
+    return total + Number(displayPrice(item) || 0) * Number(displayQuantity(item) || 0)
   }, 0),
 )
 const money = (value) =>
@@ -94,25 +72,56 @@ const money = (value) =>
     maximumFractionDigits: 2,
   }).format(value || 0)
 const priceMoney = (value) => (Number(value) > 0 ? money(value) : '—')
-const quantityText = (value) =>
-  new Intl.NumberFormat('zh-TW', {maximumFractionDigits: 8}).format(
-    Number(value || 0),
-  )
 const quoteFor = (item) => stockQuotes[item.ticker] || null
+const oddLotGapWarningPercent = 1
+const oddLotDifferencePercent = (item) =>
+  calculatePriceDifferencePercent(
+    quoteFor(item)?.oddLotPrice,
+    quoteFor(item)?.regularMarketPrice,
+  )
+const oddLotGapIsLarge = (item) =>
+  Math.abs(oddLotDifferencePercent(item)) >= oddLotGapWarningPercent
+const estimatedNetAssetValue = (item) =>
+  Number(quoteFor(item)?.estimatedNetAssetValue) > 0
+    ? Number(quoteFor(item).estimatedNetAssetValue)
+    : null
+const nearestNetPrice = (item) =>
+  calculateNearestTaiwanOrderPrice(estimatedNetAssetValue(item), item.ticker)
+const estimatedUnitPrice = (item) => {
+  const quote = quoteFor(item)
+  return (
+    [quote?.oddLotPrice, quote?.oddLotAskPrice, quote?.currentPrice].find(
+      (value) => Number(value) > 0,
+    ) || null
+  )
+}
+const estimatedPriceBasis = (item) => {
+  const quote = quoteFor(item)
+  if (Number(quote?.oddLotPrice) > 0) return '零股最新成交價'
+  if (Number(quote?.oddLotAskPrice) > 0) return '零股最佳賣價'
+  if (Number(quote?.currentPrice) > 0) return '整股現價 fallback'
+  return ''
+}
+const estimatedAmount = (item) => {
+  const quantity = Number(displayQuantity(item) || 0)
+  const price = estimatedUnitPrice(item)
+  return quantity > 0 && price > 0 ? quantity * price : null
+}
+const estimatedTotal = computed(() =>
+  store.stockBuyList.reduce(
+    (total, item) => total + Number(estimatedAmount(item) || 0),
+    0,
+  ),
+)
+const displayOrderPrice = (value) =>
+  new Intl.NumberFormat('zh-TW', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  }).format(value)
 const buyVsCurrentPricePercent = (item) =>
   calculatePurchasePriceAdvantagePercent(
     displayPrice(item),
-    quoteFor(item)?.currentPrice,
-  )
-const addOnVsBuyPricePercent = (item) =>
-  calculatePurchasePriceAdvantagePercent(
-    displayAddOnPrice(item),
-    displayPrice(item),
-  )
-const addOnVsCurrentPricePercent = (item) =>
-  calculatePurchasePriceAdvantagePercent(
-    displayAddOnPrice(item),
-    quoteFor(item)?.currentPrice,
+    estimatedUnitPrice(item),
   )
 const quoteDate = (value) => String(value || '').replaceAll('-', '/')
 const quoteTime = (value) => {
@@ -294,14 +303,10 @@ async function copyStockListFormat() {
 const numberDraftsByKey = {
   buyPrice: priceDrafts,
   quantity: quantityDrafts,
-  addOnPrice: addOnPriceDrafts,
-  targetQuantity: targetQuantityDrafts,
 }
 const numberFieldLabels = {
   buyPrice: '買進價格',
   quantity: '股數',
-  addOnPrice: '加碼價格',
-  targetQuantity: '目標總股數',
 }
 const clearNumberDraft = (itemId, key) => {
   delete numberDraftsByKey[key]?.[itemId]
@@ -332,16 +337,65 @@ async function saveNumber(item, key, value) {
 }
 
 const buyControlFields = [
-  'price',
   'quantity',
-  'add-on-price',
-  'target-quantity',
+  'price',
+  'bought',
   'delete',
 ]
 const buyControlId = (field, itemId) => {
   if (field === 'price') return `buy-price-${itemId}`
   if (field === 'quantity') return `buy-quantity-${itemId}`
   return `buy-${field}-${itemId}`
+}
+
+function selectNumberInput(event) {
+  event.target?.select()
+}
+
+async function saveBought(item, event) {
+  const bought = event.target.checked
+  try {
+    await store.updateStockBuyListItem(item.id, {bought})
+  } catch (error) {
+    event.target.checked = Boolean(item.bought)
+    store.error = ''
+    showToast({
+      tone: 'error',
+      title: '成交狀態沒有保存',
+      message: error?.message || '無法儲存資料。',
+    })
+  }
+}
+
+async function completePurchase(item, event) {
+  const buyPrice = Number(displayPrice(item) || 0)
+  if (!(buyPrice > 0)) {
+    showToast({
+      tone: 'error',
+      title: '尚未填寫買進價格',
+      message: '請先輸入買進價格，再按 Enter 標記為已成交。',
+    })
+    return
+  }
+
+  event.preventDefault()
+  event.target?.blur()
+  try {
+    await store.updateStockBuyListItem(item.id, {buyPrice, bought: true})
+    clearNumberDraft(item.id, 'buyPrice')
+    const itemIndex = store.stockBuyList.findIndex((entry) => entry.id === item.id)
+    const nextItem = store.stockBuyList[itemIndex + 1]
+    await nextTick()
+    if (nextItem) document.getElementById(`buy-quantity-${nextItem.id}`)?.focus()
+    else tickerInput.value?.focus()
+  } catch (error) {
+    store.error = ''
+    showToast({
+      tone: 'error',
+      title: '成交狀態沒有保存',
+      message: error?.message || '無法儲存資料。',
+    })
+  }
 }
 
 async function moveBuyListFocus(item, field, event) {
@@ -378,7 +432,7 @@ async function confirmReset() {
     showToast({
       tone: 'success',
       title: '今日紀錄已重設',
-      message: '已清除買進與加碼的價格及股數；股票仍保留在清單中。',
+      message: '已清除股數、買進價格與已成交勾選；股票仍保留在清單中。',
     })
   } catch (error) {
     store.error = ''
@@ -420,7 +474,7 @@ async function confirmDelete() {
     <PageHeader
       eyebrow="Daily buy list"
       title="股票待買清單"
-      description="填入買進價格即視為已買進；股票與今日買進紀錄都會自動保存在本機。"
+      description="勾選已成交即可記錄今日買進；股票與今日買進紀錄都會自動保存在本機。"
     >
       <template #actions>
         <button
@@ -494,16 +548,19 @@ async function confirmDelete() {
       class="today-buy-panel"
       flush
       title="今日買進"
-      description="填入買進價格即視為已買進；輸入目標總股數後會算出仍需買幾股。Tab 會依序填完同一欄位。"
+      description="填入股數即可依盤中零股行情估算金額；ETF iNAV 會由官方資料自動更新。"
       >
         <template #action>
           <div class="buy-summary" aria-live="polite">
             <span v-if="latestQuoteDate" class="pill pill-neutral"
-              >Yahoo {{ quoteDate(latestQuoteDate) }}
+              >官方行情 {{ quoteDate(latestQuoteDate) }}
               {{ quoteTime(latestQuoteTime) }}</span
             >
             <span class="pill pill-neutral"
-              >{{ boughtCount }} / {{ store.stockBuyList.length }} 已買進</span
+              >{{ boughtCount }} / {{ store.stockBuyList.length }} 已成交</span
+            >
+            <span v-if="estimatedTotal > 0" class="pill pill-neutral"
+              >零股預估 {{ money(estimatedTotal) }}</span
             >
             <span class="pill">今日合計 {{ money(todayTotal) }}</span>
           </div>
@@ -515,12 +572,17 @@ async function confirmDelete() {
           title="行情暫時無法更新"
           >{{ quoteError }}</AppNotice
         >
+        <p v-if="store.stockBuyList.length" class="estimate-disclaimer">
+          預估金額不含券商手續費；優先使用零股最新成交價，無成交時依最佳賣價估算。
+        </p>
 
         <div v-if="store.stockBuyList.length" class="buy-list-table">
           <div class="buy-list-header" aria-hidden="true">
             <span>股票與行情</span>
-            <span>原買進</span>
-            <span>加碼計畫</span>
+            <span>股數</span>
+            <span>官方 iNAV</span>
+            <span>買進價格</span>
+            <span>已成交</span>
             <span />
           </div>
           <article
@@ -536,19 +598,77 @@ async function confirmDelete() {
               </div>
               <div v-if="quoteFor(item)" class="buy-row__quote">
                 <small
-                  >開盤 {{ priceMoney(quoteFor(item).openPrice) }} · 最新
-                  {{ priceMoney(quoteFor(item).currentPrice) }} ·
-                  {{ quoteTime(quoteFor(item).quoteTime) }}</small
+                  >整股 {{ priceMoney(quoteFor(item).regularMarketPrice) }} · 零股成交
+                  {{ priceMoney(quoteFor(item).oddLotPrice) }} · 最佳賣
+                  {{ priceMoney(quoteFor(item).oddLotAskPrice) }}</small
                 >
+                <small
+                  v-if="Number.isFinite(oddLotDifferencePercent(item))"
+                  class="odd-lot-gap"
+                  :class="{'odd-lot-gap--warning': oddLotGapIsLarge(item)}"
+                >
+                  零股相較整股 {{ percentText(oddLotDifferencePercent(item)) }}
+                  <template v-if="oddLotGapIsLarge(item)"> · 差異超過 1%</template>
+                  · {{ quoteTime(quoteFor(item).oddLotQuoteTime) }}
+                </small>
               </div>
               <small v-else class="buy-row__quote-status">{{
                 quoteLoading ? '行情載入中…' : '暫無行情'
               }}</small>
             </div>
 
-            <div class="buy-group buy-group--primary">
-              <strong class="buy-group__title">原買進</strong>
-              <div class="buy-field buy-field--price">
+            <div class="buy-field buy-field--quantity">
+              <label class="buy-field__label" :for="`buy-quantity-${item.id}`"
+                >股數</label
+              >
+              <div class="number-control">
+                <FormattedNumberInput
+                  :id="`buy-quantity-${item.id}`"
+                  class="input input--amount"
+                  :model-value="displayQuantity(item)"
+                  :min="0"
+                  :max-fraction-digits="8"
+                  placeholder="0"
+                  @update:model-value="quantityDrafts[item.id] = $event"
+                  @change="saveNumber(item, 'quantity', $event)"
+                  @focus="selectNumberInput"
+                  @keydown.tab="moveBuyListFocus(item, 'quantity', $event)"
+                />
+                <span>股</span>
+              </div>
+              <small
+                v-if="estimatedAmount(item) != null"
+                class="buy-estimate"
+                aria-live="polite"
+              >
+                預估 {{ money(estimatedAmount(item)) }} ·
+                {{ estimatedPriceBasis(item) }}
+              </small>
+            </div>
+
+            <div class="buy-field buy-field--net-price">
+              <span class="buy-field__heading">官方 iNAV</span>
+              <div v-if="estimatedNetAssetValue(item) != null" class="market-readout">
+                <strong>{{ priceMoney(estimatedNetAssetValue(item)) }}</strong>
+                <small>
+                  折溢價
+                  {{ percentText(quoteFor(item).premiumDiscountPercent) }} ·
+                  {{ quoteTime(quoteFor(item).navQuoteTime) }}
+                </small>
+              </div>
+              <small v-else class="market-readout__empty"
+                >非 ETF 或目前未提供</small
+              >
+              <small
+                v-if="nearestNetPrice(item) != null"
+                class="net-price-suggestion"
+                aria-live="polite"
+              >
+                最接近可下單價：NT$ {{ displayOrderPrice(nearestNetPrice(item)) }}
+              </small>
+            </div>
+
+            <div class="buy-field buy-field--price">
               <label class="buy-field__label" :for="`buy-price-${item.id}`"
                 >買進價格</label
               >
@@ -563,7 +683,9 @@ async function confirmDelete() {
                   placeholder="0"
                   @update:model-value="priceDrafts[item.id] = $event"
                   @change="saveNumber(item, 'buyPrice', $event)"
+                  @focus="selectNumberInput"
                   @keydown.tab="moveBuyListFocus(item, 'price', $event)"
+                  @keydown.enter="completePurchase(item, $event)"
                 />
               </div>
               <div
@@ -576,119 +698,22 @@ async function confirmDelete() {
                     purchaseComparisonTone(buyVsCurrentPricePercent(item))
                   "
                 >
-                  相較現價 {{ percentText(buyVsCurrentPricePercent(item)) }} ·
+                  相較零股估算價 {{ percentText(buyVsCurrentPricePercent(item)) }} ·
                   {{ purchaseComparisonLabel(buyVsCurrentPricePercent(item)) }}
                 </small>
               </div>
-              </div>
-
-              <div class="buy-field buy-field--quantity">
-              <label class="buy-field__label" :for="`buy-quantity-${item.id}`"
-                >股數</label
-              >
-              <div class="number-control">
-                <FormattedNumberInput
-                  :id="`buy-quantity-${item.id}`"
-                  class="input input--amount"
-                  :model-value="displayQuantity(item)"
-                  :min="0"
-                  :max-fraction-digits="8"
-                  placeholder="0"
-                  @update:model-value="quantityDrafts[item.id] = $event"
-                  @change="saveNumber(item, 'quantity', $event)"
-                  @keydown.tab="moveBuyListFocus(item, 'quantity', $event)"
-                />
-                <span>股</span>
-              </div>
-              </div>
             </div>
 
-            <div class="buy-group buy-group--add-on">
-              <strong class="buy-group__title">加碼計畫</strong>
-              <div class="buy-field buy-field--add-on-price">
-              <label
-                class="buy-field__label"
-                :for="`buy-add-on-price-${item.id}`"
-                >加碼價格</label
-              >
-              <div class="number-control">
-                <span>NT$</span>
-                <FormattedNumberInput
-                  :id="`buy-add-on-price-${item.id}`"
-                  class="input input--amount"
-                  :model-value="displayAddOnPrice(item)"
-                  :min="0"
-                  :max-fraction-digits="4"
-                  placeholder="0"
-                  @update:model-value="addOnPriceDrafts[item.id] = $event"
-                  @change="saveNumber(item, 'addOnPrice', $event)"
-                  @keydown.tab="moveBuyListFocus(item, 'add-on-price', $event)"
-                />
-              </div>
-              <div
-                v-if="quoteFor(item) && Number(displayAddOnPrice(item)) > 0"
-                class="price-comparisons"
-              >
-                <small
-                  v-if="Number(displayPrice(item)) > 0"
-                  class="price-comparison"
-                  :class="
-                    purchaseComparisonTone(addOnVsBuyPricePercent(item))
-                  "
-                >
-                  相較原價 {{ percentText(addOnVsBuyPricePercent(item)) }} ·
-                  {{ purchaseComparisonLabel(addOnVsBuyPricePercent(item)) }}
-                </small>
-                <small
-                  class="price-comparison"
-                  :class="
-                    purchaseComparisonTone(addOnVsCurrentPricePercent(item))
-                  "
-                >
-                  相較現價 {{ percentText(addOnVsCurrentPricePercent(item)) }} ·
-                  {{ purchaseComparisonLabel(addOnVsCurrentPricePercent(item)) }}
-                </small>
-              </div>
-              </div>
-
-              <div class="buy-field buy-field--target-quantity">
-              <label
-                class="buy-field__label"
-                :for="`buy-target-quantity-${item.id}`"
-                >目標總購買股數</label
-              >
-              <div class="number-control">
-                <FormattedNumberInput
-                  :id="`buy-target-quantity-${item.id}`"
-                  class="input input--amount"
-                  :model-value="displayTargetQuantity(item)"
-                  :min="0"
-                  :max-fraction-digits="8"
-                  placeholder="0"
-                  @update:model-value="targetQuantityDrafts[item.id] = $event"
-                  @change="saveNumber(item, 'targetQuantity', $event)"
-                  @keydown.tab="moveBuyListFocus(item, 'target-quantity', $event)"
-                />
-                <span>股</span>
-              </div>
-              <small
-                class="add-on-calculation"
-                :class="{
-                  'add-on-calculation--error': targetQuantityIsInvalid(item),
-                }"
-                aria-live="polite"
-              >
-                <template v-if="targetQuantityIsInvalid(item)">
-                  目標需大於 {{ quantityText(displayQuantity(item)) }} 股
-                </template>
-                <template v-else>
-                  需再買
-                  <strong>{{ quantityText(calculatedAddOnQuantity(item)) }}</strong>
-                  股
-                </template>
-              </small>
-              </div>
-            </div>
+            <label class="buy-row__bought" :for="`buy-bought-${item.id}`">
+              <input
+                :id="`buy-bought-${item.id}`"
+                type="checkbox"
+                :checked="item.bought"
+                @change="saveBought(item, $event)"
+                @keydown.tab="moveBuyListFocus(item, 'bought', $event)"
+              />
+              <span>已成交</span>
+            </label>
 
             <button
               :id="`buy-delete-${item.id}`"
@@ -706,7 +731,7 @@ async function confirmDelete() {
         <EmptyState
           v-else
           title="還沒有待買股票"
-          description="使用左側加入股票；輸入目標總股數後，系統會算出需要加碼的股數。"
+          description="使用左側加入股票；填入股數後會依盤中零股行情自動估算金額。"
         >
           <template #icon
             ><ListChecks :size="22" aria-hidden="true"
@@ -734,7 +759,7 @@ async function confirmDelete() {
       @confirm="confirmReset"
     >
       <p>
-        將清除所有股票的<strong>買進價格、股數、加碼價格及目標總股數</strong
+        將清除所有股票的<strong>股數、買進價格與已成交勾選</strong
         >；股票本身會保留在清單中。
       </p>
     </ConfirmDialog>
@@ -783,6 +808,13 @@ async function confirmDelete() {
   justify-content: flex-end;
   gap: 7px;
 }
+.estimate-disclaimer {
+  margin: 0;
+  padding: 9px 18px 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
 .buy-list-table {
   padding-top: 10px;
   overflow-x: visible;
@@ -791,7 +823,7 @@ async function confirmDelete() {
 .buy-row {
   display: grid;
   grid-template-columns:
-    minmax(190px, 0.7fr) repeat(2, minmax(280px, 1fr)) 34px;
+    minmax(190px, 0.9fr) repeat(3, minmax(145px, 0.55fr)) minmax(82px, auto) 34px;
   align-items: center;
   gap: 10px;
   min-width: 0;
@@ -859,6 +891,14 @@ async function confirmDelete() {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+.buy-row__quote .odd-lot-gap {
+  color: var(--text-soft);
+  white-space: normal;
+}
+.buy-row__quote .odd-lot-gap--warning {
+  color: var(--danger);
+  font-weight: 780;
+}
 .price-comparisons {
   display: grid;
   gap: 3px;
@@ -879,36 +919,58 @@ async function confirmDelete() {
 .price-comparison.quote-change--neutral {
   color: var(--muted);
 }
-.buy-group {
+.buy-row > .buy-field {
   min-width: 0;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
   align-self: stretch;
-  align-items: start;
-  gap: 8px;
   padding: 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-muted);
 }
-.buy-group--primary {
+.buy-field--quantity {
   grid-column: 2;
 }
-.buy-group--add-on {
+.buy-field--net-price {
   grid-column: 3;
 }
-.buy-group__title {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
+.buy-field--price {
+  grid-column: 4;
+}
+.buy-row__bought {
+  grid-column: 5;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 40px;
+  color: var(--text-soft);
+  font-size: 0.78rem;
+  font-weight: 760;
+  cursor: pointer;
   white-space: nowrap;
+}
+.buy-row__bought input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--success);
+  cursor: pointer;
 }
 .buy-field {
   min-width: 0;
 }
 .buy-field__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.buy-field__heading {
   display: block;
   margin-bottom: 5px;
   color: var(--text-soft);
@@ -928,23 +990,42 @@ async function confirmDelete() {
   min-height: 40px;
   padding-block: 7px;
 }
-.add-on-calculation {
+.buy-estimate,
+.net-price-suggestion {
   display: block;
   margin-top: 5px;
-  color: var(--muted);
-  font-size: 0.7rem;
-  font-weight: 680;
+  color: var(--primary);
+  font-size: 0.72rem;
+  font-weight: 720;
   font-variant-numeric: tabular-nums;
 }
-.add-on-calculation strong {
-  color: var(--primary);
-  font-size: 0.78rem;
+.buy-estimate {
+  color: var(--text-soft);
 }
-.add-on-calculation--error {
-  color: var(--danger);
+.market-readout {
+  display: grid;
+  gap: 3px;
+  min-height: 40px;
+}
+.market-readout strong {
+  color: var(--text);
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+}
+.market-readout small,
+.market-readout__empty {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 650;
+  line-height: 1.35;
+}
+.market-readout__empty {
+  display: block;
+  min-height: 40px;
+  padding-top: 9px;
 }
 .buy-row__delete {
-  grid-column: 4;
+  grid-column: 6;
   grid-row: 1;
   width: 30px;
   min-width: 30px;
@@ -992,12 +1073,11 @@ async function confirmDelete() {
     overflow-x: visible;
   }
   .buy-row {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     grid-template-areas:
-      'identity'
-      'primary'
-      'add-on'
-      'delete';
+      'identity identity delete'
+      'quantity net-price price'
+      'bought bought bought';
     gap: 10px;
     min-width: 0;
     min-height: 0;
@@ -1017,25 +1097,31 @@ async function confirmDelete() {
     grid-area: delete;
     justify-self: end;
   }
-  .buy-group--primary {
-    grid-area: primary;
+  .buy-field--quantity {
+    grid-area: quantity;
   }
-  .buy-group--add-on {
-    grid-area: add-on;
+  .buy-field--net-price {
+    grid-area: net-price;
   }
-  .buy-group__title {
-    position: static;
-    width: auto;
-    height: auto;
-    grid-column: 1 / -1;
-    overflow: visible;
-    clip: auto;
-    color: var(--text);
-    font-size: 0.78rem;
-    white-space: normal;
+  .buy-field--price {
+    grid-area: price;
+  }
+  .buy-row__bought {
+    grid-area: bought;
+    justify-self: start;
   }
   .buy-field__label {
+    position: static;
+    display: block;
+    width: auto;
+    height: auto;
+    margin: 0 0 5px;
+    overflow: visible;
+    clip: auto;
+    color: var(--text-soft);
     font-size: 0.76rem;
+    font-weight: 720;
+    white-space: normal;
   }
 }
 
@@ -1048,11 +1134,15 @@ async function confirmDelete() {
     width: 100%;
     justify-content: flex-start;
   }
-  .buy-group {
-    grid-template-columns: 1fr;
-  }
-  .buy-group__title {
-    grid-column: auto;
+  .buy-row {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'identity'
+      'quantity'
+      'net-price'
+      'price'
+      'bought'
+      'delete';
   }
   .add-stock-form {
     grid-template-columns: 1fr;

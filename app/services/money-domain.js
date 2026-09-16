@@ -16,7 +16,7 @@ export const CONFIG_LIMITS = Object.freeze({
   maxTickerLength: 12
 })
 
-const CONFIG_VERSION = 11
+const CONFIG_VERSION = 13
 const STOCK_TICKER_COLLATOR = new Intl.Collator('en', { sensitivity: 'base' })
 const DEFAULT_GROUP_ORDERS = {
   [SYSTEM_CASH_GROUP_ID]: 0,
@@ -205,14 +205,9 @@ export function normalizeStockBuyListItem(input = {}, fallbackOrder = 0) {
     name: clipString(input.name, CONFIG_LIMITS.maxNameLength),
     buyPrice: Math.max(0, finiteNumber(input.buyPrice)),
     quantity: Math.max(0, finiteNumber(input.quantity)),
-    addOnPrice: Math.max(0, finiteNumber(input.addOnPrice)),
-    targetQuantity: Math.max(0, finiteNumber(input.targetQuantity)),
+    bought: Boolean(input.bought),
     order: Number.isFinite(Number(input.order)) ? Number(input.order) : fallbackOrder
   }
-}
-
-export function calculateAdditionalBuyQuantity(quantity, targetQuantity) {
-  return Math.max(0, finiteNumber(targetQuantity) - finiteNumber(quantity))
 }
 
 export function calculatePriceDifferencePercent(price, referencePrice) {
@@ -227,6 +222,27 @@ export function calculatePurchasePriceAdvantagePercent(price, referencePrice) {
   const difference = calculatePriceDifferencePercent(price, referencePrice)
   if (difference == null || difference === 0) return difference
   return -difference
+}
+
+function isFundLikeTicker(ticker) {
+  return /^(?:00|01|02)[0-9A-Z]{2,}$/u.test(normalizeTicker(ticker))
+}
+
+export function calculateNearestTaiwanOrderPrice(price, ticker = '') {
+  const value = finiteNumber(price, NaN)
+  if (!(value > 0)) return null
+
+  let tickSize
+  if (isFundLikeTicker(ticker)) tickSize = value < 50 ? 0.01 : 0.05
+  else if (value < 10) tickSize = 0.01
+  else if (value < 50) tickSize = 0.05
+  else if (value < 100) tickSize = 0.1
+  else if (value < 500) tickSize = 0.5
+  else if (value < 1000) tickSize = 1
+  else tickSize = 5
+
+  const fractionDigits = tickSize < 0.1 ? 2 : tickSize < 1 ? 1 : 0
+  return Number((Math.round(value / tickSize) * tickSize).toFixed(fractionDigits))
 }
 
 function normalizeSnapshot(input = {}) {

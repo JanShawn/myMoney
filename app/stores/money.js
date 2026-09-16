@@ -279,8 +279,7 @@ export const useMoneyStore = defineStore('money', () => {
       name: String(body.name || '').trim(),
       buyPrice: 0,
       quantity: 0,
-      addOnPrice: 0,
-      targetQuantity: 0,
+      bought: false,
       order: nextOrder
     }
     draft.stockBuyList.push(item)
@@ -291,16 +290,17 @@ export const useMoneyStore = defineStore('money', () => {
     const item = draft.stockBuyList?.find((entry) => entry.id === id)
     if (!item) throw new Error('找不到這筆待買股票。')
     const allowed = {}
-    for (const key of ['buyPrice', 'quantity', 'addOnPrice', 'targetQuantity', 'order']) {
+    for (const key of ['buyPrice', 'quantity', 'bought', 'order']) {
       if (Object.hasOwn(body, key)) allowed[key] = body[key]
     }
-    for (const key of ['buyPrice', 'addOnPrice']) {
+    if ('bought' in allowed) allowed.bought = Boolean(allowed.bought)
+    for (const key of ['buyPrice']) {
       if (!(key in allowed)) continue
       const price = Number(allowed[key] || 0)
       if (!Number.isFinite(price) || price < 0) throw new Error('買進價格不能小於 0。')
       allowed[key] = price
     }
-    for (const key of ['quantity', 'targetQuantity']) {
+    for (const key of ['quantity']) {
       if (!(key in allowed)) continue
       const quantity = Number(allowed[key] || 0)
       if (!Number.isFinite(quantity) || quantity < 0) throw new Error('股數不能小於 0。')
@@ -321,8 +321,7 @@ export const useMoneyStore = defineStore('money', () => {
     for (const item of draft.stockBuyList || []) {
       item.buyPrice = 0
       item.quantity = 0
-      item.addOnPrice = 0
-      item.targetQuantity = 0
+      item.bought = false
     }
     return draft.stockBuyList || []
   })
