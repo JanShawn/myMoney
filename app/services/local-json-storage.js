@@ -3,7 +3,9 @@ import { assertConfigCollectionLimits, CONFIG_LIMITS, createDefaultConfig, norma
 const DB_NAME = 'mymoney-local'
 const STORE_NAME = 'key-value'
 const CACHE_KEY = 'current-data'
-const LEGACY_HANDLE_KEY = 'json-file-handle'
+const SYNC_FILE_HANDLE_KEY = 'json-file-handle'
+const SYNC_FILE_META_KEY = 'sync-file-meta'
+const SYNC_DEVICE_ID_KEY = 'sync-device-id'
 const LEGACY_FILE_META_KEY = 'json-file-meta'
 const JSON_BACKUP_META_KEY = 'json-backup-meta'
 const JSON_BACKUP_DATA_KEY = 'json-backup-data'
@@ -53,7 +55,7 @@ function configSummary(input) {
   }
 }
 
-function configFingerprint(input) {
+export function configFingerprint(input) {
   const text = JSON.stringify(toPlainConfig(input))
   let hash = 2166136261
   for (let index = 0; index < text.length; index += 1) {
@@ -61,6 +63,54 @@ function configFingerprint(input) {
     hash = Math.imul(hash, 16777619)
   }
   return (hash >>> 0).toString(16).padStart(8, '0')
+}
+
+function normalizeSyncMetadata(input = {}) {
+  const revision = Math.max(0, Math.trunc(Number(input.revision || 0)))
+  return {
+    schemaVersion: 1,
+    revision,
+    updatedAt: typeof input.updatedAt === 'string' ? input.updatedAt : null,
+    deviceId: typeof input.deviceId === 'string' ? input.deviceId.slice(0, 120) : ''
+  }
+}
+
+export function createSyncFileDocument(input, metadata = {}) {
+  return {
+    ...toPlainConfig(input),
+    _sync: normalizeSyncMetadata(metadata)
+  }
+}
+
+export function inspectSyncFileText(text, fileName = '同步 JSON') {
+  if (typeof text !== 'string' || text.length > CONFIG_LIMITS.maxJsonBytes) {
+    throw new Error(`「${fileName}」太大（上限 ${Math.round(CONFIG_LIMITS.maxJsonBytes / (1024 * 1024))} MB）。`)
+  }
+  const parsed = parseJsonText(text, fileName)
+  const data = validateJsonConfig(parsed, fileName)
+  return {
+    data,
+    metadata: normalizeSyncMetadata(parsed?._sync),
+    fingerprint: configFingerprint(data),
+    summary: configSummary(data),
+    hasUserData: hasUserData(data)
+  }
+}
+
+export function hasSyncConflict({ lastRemoteFingerprint, remoteFingerprint, localFingerprint }) {
+  if (!remoteFingerprint || remoteFingerprint === localFingerprint) return false
+  if (!lastRemoteFingerprint) return true
+  return remoteFingerprint !== lastRemoteFingerprint
+}
+
+export function decideSyncDirection({ lastRemoteFingerprint, lastLocalFingerprint, remoteFingerprint, localFingerprint }) {
+  if (remoteFingerprint === localFingerprint) return 'current'
+  if (!lastRemoteFingerprint || !lastLocalFingerprint) return 'conflict'
+  const remoteChanged = remoteFingerprint !== lastRemoteFingerprint
+  const localChanged = localFingerprint !== lastLocalFingerprint
+  if (remoteChanged && !localChanged) return 'pull'
+  if (!remoteChanged && localChanged) return 'push'
+  return 'conflict'
 }
 
 function recordsById(records = []) {
@@ -257,7 +307,13 @@ async function addBackup(data) {
   await dbSet(BACKUPS_KEY, backups.slice(-BACKUP_LIMIT))
 }
 
-const JSON_BACKUP_FILE_NAME = 'myMoney-backup.json'
+const SYNC_FILE_NAME = 'myMoney-sync.json'
+const JSON_FILE_TYPES = [{ description: 'myMoney JSON 資料', accept: { 'application/json': ['.json'] } }]
+
+export function createJsonBackupFileName(date = new Date()) {
+  const pad = (value) => String(value).padStart(2, '0')
+  return `myMoney-backup-${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}.json`
+}
 
 function validateJsonConfig(parsed, fileName = 'JSON') {
   const isObject = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
@@ -331,16 +387,245 @@ async function recordJsonBackup(data, fileName, createdAt = new Date().toISOStri
   return getBackupStatus(normalized)
 }
 
+async function getSyncDeviceId() {
+  let deviceId = await dbGet(SYNC_DEVICE_ID_KEY)
+  if (deviceId) return deviceId
+  deviceId = globalThis.crypto?.randomUUID?.() || `device-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  await dbSet(SYNC_DEVICE_ID_KEY, deviceId)
+  return deviceId
+}
+
+async function querySyncPermission(handle, mode = 'readwrite') {
+  if (!handle) return 'unavailable'
+  if (typeof handle.queryPermission !== 'function') return 'granted'
+  try {
+    return await handle.queryPermission({ mode })
+  } catch {
+    return 'prompt'
+  }
+}
+
+async function requireSyncPermission(handle, mode = 'readwrite') {
+  const current = await querySyncPermission(handle, mode)
+  if (current === 'granted') return
+  const requested = typeof handle?.requestPermission === 'function'
+    ? await handle.requestPermission({ mode })
+    : 'denied'
+  if (requested !== 'granted') throw new Error('未取得同步檔案權限；瀏覽器資料仍會照常自動保存。')
+}
+
+async function readSyncHandle(handle) {
+  const file = await handle.getFile()
+  if (Number(file.size) > CONFIG_LIMITS.maxJsonBytes) {
+    throw new Error(`「${file.name || handle.name}」太大（上限 ${Math.round(CONFIG_LIMITS.maxJsonBytes / (1024 * 1024))} MB）。`)
+  }
+  const inspected = inspectSyncFileText(await file.text(), file.name || handle.name)
+  return { ...inspected, fileName: file.name || handle.name, lastModified: file.lastModified || null }
+}
+
+async function writeSyncHandle(handle, document) {
+  let writable
+  try {
+    writable = await handle.createWritable()
+    await writable.write(`${JSON.stringify(document, null, 2)}\n`)
+    await writable.close()
+  } catch (error) {
+    try { await writable?.abort?.() } catch { /* 保留原始寫入錯誤。 */ }
+    throw new Error(`無法更新同步檔案：${error?.message || '檔案可能被鎖定或 Google Drive 尚未就緒'}。`)
+  }
+}
+
+async function saveSyncMeta(meta) {
+  await dbSet(SYNC_FILE_META_KEY, {
+    fileName: meta.fileName || '',
+    lastSyncedAt: meta.lastSyncedAt || null,
+    lastRemoteUpdatedAt: meta.lastRemoteUpdatedAt || null,
+    lastRemoteFingerprint: meta.lastRemoteFingerprint || null,
+    localFingerprint: meta.localFingerprint || null,
+    remoteRevision: Math.max(0, Math.trunc(Number(meta.remoteRevision || 0)))
+  })
+}
+
+async function getSyncFileStatus(currentInput) {
+  const supported = supportsFileSystemAccess()
+  const handle = await dbGet(SYNC_FILE_HANDLE_KEY)
+  const meta = (await dbGet(SYNC_FILE_META_KEY)) || {}
+  const connected = Boolean(handle)
+  const currentFingerprint = configFingerprint(currentInput)
+  return {
+    supported,
+    connected,
+    fileName: handle?.name || meta.fileName || '',
+    permission: connected ? await querySyncPermission(handle) : 'unavailable',
+    lastSyncedAt: meta.lastSyncedAt || null,
+    lastRemoteUpdatedAt: meta.lastRemoteUpdatedAt || null,
+    hasLocalChanges: connected && meta.localFingerprint !== currentFingerprint
+  }
+}
+
 export function supportsFileSystemAccess() {
-  return typeof window !== 'undefined' && 'showSaveFilePicker' in window
+  return typeof window !== 'undefined' && 'showOpenFilePicker' in window && 'showSaveFilePicker' in window
+}
+
+export async function connectExistingSyncFile(currentInput) {
+  if (!supportsFileSystemAccess()) throw new Error('此瀏覽器不支援固定同步檔案，請使用最新版 Chrome 或 Edge。')
+  const [handle] = await window.showOpenFilePicker({ multiple: false, types: JSON_FILE_TYPES })
+  if (!handle) throw new DOMException('未選擇檔案', 'AbortError')
+  const remote = await readSyncHandle(handle)
+  const localFingerprint = configFingerprint(currentInput)
+  const isSameData = remote.fingerprint === localFingerprint
+  const now = new Date().toISOString()
+  await dbSet(SYNC_FILE_HANDLE_KEY, handle)
+  await saveSyncMeta({
+    fileName: handle.name,
+    lastSyncedAt: isSameData ? now : null,
+    lastRemoteUpdatedAt: remote.metadata.updatedAt || (remote.lastModified ? new Date(remote.lastModified).toISOString() : null),
+    lastRemoteFingerprint: remote.fingerprint,
+    localFingerprint: isSameData ? localFingerprint : null,
+    remoteRevision: remote.metadata.revision
+  })
+  return {
+    fileName: handle.name,
+    requiresImport: !isSameData,
+    fingerprint: remote.fingerprint,
+    updatedAt: remote.metadata.updatedAt || (remote.lastModified ? new Date(remote.lastModified).toISOString() : null),
+    summary: remote.summary,
+    changes: summarizeConfigChanges(currentInput, remote.data),
+    hasUserData: remote.hasUserData,
+    syncStatus: await getSyncFileStatus(currentInput)
+  }
+}
+
+export async function createNewSyncFile(currentInput) {
+  if (!supportsFileSystemAccess()) throw new Error('此瀏覽器不支援固定同步檔案，請使用最新版 Chrome 或 Edge。')
+  const handle = await window.showSaveFilePicker({ suggestedName: SYNC_FILE_NAME, types: JSON_FILE_TYPES })
+  await requireSyncPermission(handle)
+  const now = new Date().toISOString()
+  const fingerprint = configFingerprint(currentInput)
+  const metadata = { revision: 1, updatedAt: now, deviceId: await getSyncDeviceId() }
+  await writeSyncHandle(handle, createSyncFileDocument(currentInput, metadata))
+  await dbSet(SYNC_FILE_HANDLE_KEY, handle)
+  await saveSyncMeta({
+    fileName: handle.name,
+    lastSyncedAt: now,
+    lastRemoteUpdatedAt: now,
+    lastRemoteFingerprint: fingerprint,
+    localFingerprint: fingerprint,
+    remoteRevision: metadata.revision
+  })
+  return { fileName: handle.name, syncStatus: await getSyncFileStatus(currentInput) }
+}
+
+export async function uploadToSyncFile(currentInput, options = {}) {
+  const handle = await dbGet(SYNC_FILE_HANDLE_KEY)
+  if (!handle) throw new Error('尚未連結同步檔案。')
+  await requireSyncPermission(handle)
+  const remote = await readSyncHandle(handle)
+  const meta = (await dbGet(SYNC_FILE_META_KEY)) || {}
+  const localFingerprint = configFingerprint(currentInput)
+  const direction = options.force
+    ? (remote.fingerprint === localFingerprint ? 'current' : 'push')
+    : decideSyncDirection({
+    lastRemoteFingerprint: meta.lastRemoteFingerprint,
+    lastLocalFingerprint: meta.localFingerprint,
+    remoteFingerprint: remote.fingerprint,
+    localFingerprint
+      })
+  if (direction === 'conflict') {
+    return {
+      conflict: true,
+      fileName: handle.name,
+      remoteUpdatedAt: remote.metadata.updatedAt || (remote.lastModified ? new Date(remote.lastModified).toISOString() : null),
+      remoteSummary: remote.summary,
+      changes: summarizeConfigChanges(currentInput, remote.data),
+      syncStatus: await getSyncFileStatus(currentInput)
+    }
+  }
+
+  const now = new Date().toISOString()
+  if (direction === 'pull') {
+    return {
+      conflict: false,
+      requiresPull: true,
+      fileName: handle.name,
+      remoteUpdatedAt: remote.metadata.updatedAt || (remote.lastModified ? new Date(remote.lastModified).toISOString() : null),
+      syncStatus: await getSyncFileStatus(currentInput)
+    }
+  }
+
+  const revision = Math.max(remote.metadata.revision, Number(meta.remoteRevision || 0)) + 1
+  if (direction === 'push') {
+    const metadata = { revision, updatedAt: now, deviceId: await getSyncDeviceId() }
+    await writeSyncHandle(handle, createSyncFileDocument(currentInput, metadata))
+  }
+  await saveSyncMeta({
+    fileName: handle.name,
+    lastSyncedAt: now,
+    lastRemoteUpdatedAt: direction === 'current' ? (remote.metadata.updatedAt || now) : now,
+    lastRemoteFingerprint: localFingerprint,
+    localFingerprint,
+    remoteRevision: direction === 'current' ? remote.metadata.revision : revision
+  })
+  return {
+    conflict: false,
+    unchanged: direction === 'current',
+    fileName: handle.name,
+    syncStatus: await getSyncFileStatus(currentInput)
+  }
+}
+
+export async function inspectLinkedSyncFile(currentInput) {
+  const handle = await dbGet(SYNC_FILE_HANDLE_KEY)
+  if (!handle) throw new Error('尚未連結同步檔案。')
+  await requireSyncPermission(handle, 'read')
+  const remote = await readSyncHandle(handle)
+  return {
+    fileName: handle.name,
+    fingerprint: remote.fingerprint,
+    updatedAt: remote.metadata.updatedAt || (remote.lastModified ? new Date(remote.lastModified).toISOString() : null),
+    summary: remote.summary,
+    changes: summarizeConfigChanges(currentInput, remote.data),
+    hasUserData: remote.hasUserData
+  }
+}
+
+export async function importLinkedSyncFile(expectedFingerprint) {
+  const handle = await dbGet(SYNC_FILE_HANDLE_KEY)
+  if (!handle) throw new Error('尚未連結同步檔案。')
+  await requireSyncPermission(handle, 'read')
+  const remote = await readSyncHandle(handle)
+  if (expectedFingerprint && remote.fingerprint !== expectedFingerprint) {
+    throw new Error('同步檔案在確認期間已有更新，請重新檢查後再下載。')
+  }
+  const current = await dbGet(CACHE_KEY)
+  if (current && summarizeConfigChanges(current, remote.data).length) await addBackup(current)
+  await dbSet(CACHE_KEY, remote.data)
+  const now = new Date().toISOString()
+  await saveSyncMeta({
+    fileName: handle.name,
+    lastSyncedAt: now,
+    lastRemoteUpdatedAt: remote.metadata.updatedAt || (remote.lastModified ? new Date(remote.lastModified).toISOString() : now),
+    lastRemoteFingerprint: remote.fingerprint,
+    localFingerprint: remote.fingerprint,
+    remoteRevision: remote.metadata.revision
+  })
+  return {
+    data: remote.data,
+    backupStatus: await getBackupStatus(remote.data),
+    syncStatus: await getSyncFileStatus(remote.data)
+  }
+}
+
+export async function disconnectSyncFile(currentInput) {
+  await dbDelete(SYNC_FILE_HANDLE_KEY)
+  await dbDelete(SYNC_FILE_META_KEY)
+  return { syncStatus: await getSyncFileStatus(currentInput) }
 }
 
 export async function loadLocalData() {
   const cached = await dbGet(CACHE_KEY)
   const data = normalizeConfig(cached)
-  // 舊版可能保留檔案控制代碼；新流程不再長期連結檔案，僅保留最近備份資訊。
-  await dbDelete(LEGACY_HANDLE_KEY)
-  return { data, backupStatus: await getBackupStatus(data) }
+  return { data, backupStatus: await getBackupStatus(data), syncStatus: await getSyncFileStatus(data) }
 }
 
 export async function persistLocalData(input, options = {}) {
@@ -348,13 +633,13 @@ export async function persistLocalData(input, options = {}) {
   const previous = await dbGet(CACHE_KEY)
   if (options.createBackup !== false && summarizeConfigChanges(previous, data).length) await addBackup(previous)
   await dbSet(CACHE_KEY, data)
-  return { data, backupStatus: await getBackupStatus(data) }
+  return { data, backupStatus: await getBackupStatus(data), syncStatus: await getSyncFileStatus(data) }
 }
 
 export async function saveJsonBackup(input) {
   const data = toPlainConfig(input)
   const createdAt = new Date().toISOString()
-  let fileName = JSON_BACKUP_FILE_NAME
+  let fileName = createJsonBackupFileName()
 
   try {
     if (supportsFileSystemAccess()) {
@@ -380,7 +665,7 @@ export async function saveJsonBackup(input) {
     throw new Error(`JSON 備份沒有儲存成功：${error?.message || 'Windows 無法寫入所選位置'}。瀏覽器中的資料仍已正常保存。`)
   }
 
-  return { data, backupStatus: await recordJsonBackup(data, fileName, createdAt) }
+  return { data, backupStatus: await recordJsonBackup(data, fileName, createdAt), syncStatus: await getSyncFileStatus(data) }
 }
 
 export async function inspectJsonImport(file, currentInput) {
@@ -425,7 +710,7 @@ export async function restoreLocalBackup(createdAt) {
   await addBackup(current)
   const data = toPlainConfig(selected.data)
   await dbSet(CACHE_KEY, data)
-  return { data, backupStatus: await getBackupStatus(data) }
+  return { data, backupStatus: await getBackupStatus(data), syncStatus: await getSyncFileStatus(data) }
 }
 
 export function createResetConfig(date = new Date()) {
@@ -443,9 +728,8 @@ export async function resetLocalData() {
   await dbDelete(JSON_BACKUP_META_KEY)
   await dbDelete(JSON_BACKUP_DATA_KEY)
   await dbDelete(LEGACY_FILE_META_KEY)
-  await dbDelete(LEGACY_HANDLE_KEY)
 
-  return { data, backupStatus: await getBackupStatus(data) }
+  return { data, backupStatus: await getBackupStatus(data), syncStatus: await getSyncFileStatus(data) }
 }
 
 export async function importJsonFile(file) {
@@ -454,5 +738,5 @@ export async function importJsonFile(file) {
   if (current && summarizeConfigChanges(current, data).length) await addBackup(current)
   await dbSet(CACHE_KEY, data)
   const createdAt = file.lastModified ? new Date(file.lastModified).toISOString() : new Date().toISOString()
-  return { data, backupStatus: await recordJsonBackup(data, file.name, createdAt) }
+  return { data, backupStatus: await recordJsonBackup(data, file.name, createdAt), syncStatus: await getSyncFileStatus(data) }
 }

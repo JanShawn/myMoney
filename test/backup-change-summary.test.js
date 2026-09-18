@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { createResetConfig, inspectJsonImport, summarizeConfigChanges } from '../app/services/local-json-storage'
+import { createJsonBackupFileName, createResetConfig, inspectJsonImport, summarizeConfigChanges } from '../app/services/local-json-storage'
 import { createDefaultConfig } from '../app/services/money-domain'
 
 describe('IndexedDB 備份異動摘要', () => {
+  it('為獨立備份產生包含本機日期時間的檔名', () => {
+    const date = new Date(2026, 8, 18, 17, 30)
+    expect(createJsonBackupFileName(date)).toBe('myMoney-backup-2026-09-18-1730.json')
+  })
+
   it('列出帳戶金額、持倉與盤點異動', () => {
     const before = createDefaultConfig()
     before.items.push({

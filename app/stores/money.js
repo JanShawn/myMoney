@@ -2,8 +2,9 @@ import { defineStore } from 'pinia'
 import { toRaw } from 'vue'
 import { calculateRecurringCashflow, calculateSummary, compareStockTickers, createDefaultConfig, normalizeAccountItem, normalizeConfig, normalizeTicker, SYSTEM_CASH_GROUP_ID, SYSTEM_CASH_ITEM_ID, upsertSnapshot } from '~/services/money-domain'
 import {
-  importJsonFile, inspectJsonImport, listLocalBackups, loadLocalData, persistLocalData,
-  resetLocalData, restoreLocalBackup, saveJsonBackup
+  connectExistingSyncFile, createNewSyncFile, disconnectSyncFile, importJsonFile, importLinkedSyncFile,
+  inspectJsonImport, inspectLinkedSyncFile, listLocalBackups, loadLocalData, persistLocalData,
+  resetLocalData, restoreLocalBackup, saveJsonBackup, uploadToSyncFile
 } from '~/services/local-json-storage'
 import { fetchMarketPreview, fetchStockBuyListQuotes, lookupMarketInstrument, lookupMarketInstrumentName } from '~/services/market-service'
 import { fetchTwdExchangeRates } from '~/services/exchange-rate-service'
@@ -24,6 +25,15 @@ export const useMoneyStore = defineStore('money', () => {
       changes: [],
       summary: null,
       comparisonAvailable: false
+    },
+    syncFile: {
+      supported: false,
+      connected: false,
+      fileName: '',
+      permission: 'unavailable',
+      lastSyncedAt: null,
+      lastRemoteUpdatedAt: null,
+      hasLocalChanges: false
     }
   })
 
@@ -47,6 +57,7 @@ export const useMoneyStore = defineStore('money', () => {
     config.value = normalizeConfig(result.data)
     storageStatus.lastSavedAt = config.value.settings?.lastSavedAt || null
     if (result.backupStatus) Object.assign(storageStatus.jsonBackup, result.backupStatus)
+    if (result.syncStatus) Object.assign(storageStatus.syncFile, result.syncStatus)
   }
 
   function applyPersistResult(result) {
@@ -546,6 +557,28 @@ export const useMoneyStore = defineStore('money', () => {
   })
   const previewJsonImport = (file) => run(() => inspectJsonImport(file, config.value))
   const importJson = (file) => run(async () => { applyPersistResult(await importJsonFile(file)) })
+  const connectSyncFile = () => run(async () => {
+    const result = await connectExistingSyncFile(config.value)
+    Object.assign(storageStatus.syncFile, result.syncStatus)
+    return result
+  })
+  const createSyncFile = () => run(async () => {
+    const result = await createNewSyncFile(config.value)
+    Object.assign(storageStatus.syncFile, result.syncStatus)
+    return result
+  })
+  const uploadSyncFile = (options) => run(async () => {
+    const result = await uploadToSyncFile(config.value, options)
+    if (result.data) applyStorageResult(result)
+    else Object.assign(storageStatus.syncFile, result.syncStatus)
+    return result
+  })
+  const previewSyncFile = () => run(() => inspectLinkedSyncFile(config.value))
+  const downloadSyncFile = (fingerprint) => run(async () => applyStorageResult(await importLinkedSyncFile(fingerprint)))
+  const disconnectSync = () => run(async () => {
+    const result = await disconnectSyncFile(config.value)
+    Object.assign(storageStatus.syncFile, result.syncStatus)
+  })
   const getBackups = () => run(() => listLocalBackups())
   const restoreBackup = (createdAt) => run(async () => applyStorageResult(await restoreLocalBackup(createdAt)))
   const resetAllData = () => run(async () => applyStorageResult(await resetLocalData()))
@@ -559,6 +592,7 @@ export const useMoneyStore = defineStore('money', () => {
     addStockBuyListItem, updateStockBuyListItem, deleteStockBuyListItem, resetStockBuyListDaily, updateStockBuyListNames,
     lookupHolding, lookupStockName, loadStockBuyListQuotes, marketPreview, refreshExchangeRates, saveSnapshot, deleteSnapshot,
     saveJson, previewJsonImport, importJson,
+    connectSyncFile, createSyncFile, uploadSyncFile, previewSyncFile, downloadSyncFile, disconnectSync,
     getBackups, restoreBackup, resetAllData,
     exportExcel
   }
