@@ -1,7 +1,7 @@
 <script setup>
 import { CheckCircle2, ExternalLink, LayoutGrid, List, Pencil, RefreshCw, Search, Trash2 } from '@lucide/vue'
 import { yahooQuoteUrl } from '~/services/market-service'
-import { defaultHoldingLeverage } from '~/services/money-domain'
+import { compareStockTickers, defaultHoldingLeverage } from '~/services/money-domain'
 import { useMoneyStore } from '~/stores/money'
 
 const store = useMoneyStore()
@@ -19,7 +19,6 @@ const marketUpdating = ref(false)
 const resolvedTicker = ref('')
 const pendingDeleteHoldingId = ref('')
 const quantityDrafts = reactive({})
-const priceDrafts = reactive({})
 const leverageDrafts = reactive({})
 const lookup = reactive({ loading: false, status: 'idle', message: '', source: '', yahooUrl: '' })
 const leverageWasEdited = ref(false)
@@ -32,7 +31,7 @@ const quantityText = (value) => new Intl.NumberFormat('zh-TW', { maximumFraction
 const normalizedTicker = computed(() => String(form.ticker || '').trim().toUpperCase())
 const instrumentReady = computed(() => Boolean(form.name.trim()) && Number(form.price) > 0)
 const displayQuantity = (holding) => quantityDrafts[holding.id] ?? holding.quantity
-const displayPrice = (holding) => priceDrafts[holding.id] ?? holding.price
+const displayPrice = (holding) => holding.price
 const displayLeverage = (holding) => leverageDrafts[holding.id] ?? holding.leverage ?? 1
 const holdingValue = (holding) => Number(displayQuantity(holding) || 0) * Number(displayPrice(holding) || 0)
 const holdingExposureValue = (holding) => holdingValue(holding) * Number(displayLeverage(holding) ?? 1)
@@ -50,10 +49,7 @@ const displayedHoldings = computed(() => {
   return holdings.sort((left, right) => {
     if (holdingSort.value === 'quantity') return Number(displayQuantity(right) || 0) - Number(displayQuantity(left) || 0)
     if (holdingSort.value === 'marketValue') return holdingValue(right) - holdingValue(left)
-    const leftTicker = String(left.ticker || '').toUpperCase()
-    const rightTicker = String(right.ticker || '').toUpperCase()
-    const numericCodes = /^\d+$/.test(leftTicker) && /^\d+$/.test(rightTicker)
-    const difference = leftTicker.localeCompare(rightTicker, 'zh-TW', { numeric: !numericCodes, sensitivity: 'base' })
+    const difference = compareStockTickers(left.ticker, right.ticker)
     return difference || Number(left.order || 0) - Number(right.order || 0)
   })
 })
@@ -104,7 +100,24 @@ function revealHoldingEditor(holdingId) {
   const editor = document.getElementById(`holding-editor-${holdingId}`)
   const quantityInput = document.getElementById(`quantity-${holdingId}`)
   quantityInput?.focus({ preventScroll: true })
+  quantityInput?.select()
   editor?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+}
+
+function advanceHoldingQuantity(holdingId, event) {
+  event?.preventDefault()
+  event?.currentTarget?.blur()
+  const holdings = displayedHoldings.value
+  const currentIndex = holdings.findIndex((holding) => holding.id === holdingId)
+  if (currentIndex < 0 || !holdings.length) return
+  const direction = event?.shiftKey ? -1 : 1
+  const nextIndex = (currentIndex + direction + holdings.length) % holdings.length
+  const nextHoldingId = holdings[nextIndex].id
+  if (nextHoldingId === expandedHoldingId.value) {
+    nextTick(() => revealHoldingEditor(nextHoldingId))
+    return
+  }
+  expandedHoldingId.value = nextHoldingId
 }
 
 async function lookupTicker() {
@@ -263,26 +276,6 @@ async function saveQuantity(holding, value) {
     showToast({ tone: 'error', title: '持倉修改沒有保存', message: `「${holding.name}」的持有數量：${error?.message || '無法寫入資料。'}` })
   }
 }
-async function savePrice(holding, value) {
-  if (!(Number(value) > 0)) {
-    priceDrafts[holding.id] = holding.price
-    showToast({ tone: 'error', title: '持倉修改沒有保存', message: `「${holding.name}」的目前價格必須大於 0。` })
-    return
-  }
-  if (Number(value) === Number(holding.price)) {
-    delete priceDrafts[holding.id]
-    return
-  }
-  try {
-    await store.updateHolding(holding.id, { price: Number(value), priceSource: 'manual' })
-    delete priceDrafts[holding.id]
-    showToast({ tone: 'success', title: '持倉價格已更新', message: `「${holding.name}」的目前價格已保存。`, duration: 3000 })
-  } catch (error) {
-    delete priceDrafts[holding.id]
-    store.error = ''
-    showToast({ tone: 'error', title: '持倉修改沒有保存', message: `「${holding.name}」的價格：${error?.message || '無法寫入資料。'}` })
-  }
-}
 async function saveLeverage(holding, value) {
   const leverage = value === '' ? Number.NaN : Number(value)
   if (!Number.isInteger(leverage)) {
@@ -404,17 +397,13 @@ async function confirmDeleteHolding(holding) {
             <div v-if="expandedHoldingId === holding.id" :id="`holding-editor-${holding.id}`" class="holding-edit-fields">
               <div class="holding-compact-field">
                 <label :for="`quantity-${holding.id}`">目前持有股數</label>
-                <FormattedNumberInput :id="`quantity-${holding.id}`" class="input input--amount" :model-value="displayQuantity(holding)" :min="0" :max-fraction-digits="8" @update:model-value="quantityDrafts[holding.id] = $event" @change="saveQuantity(holding, $event)" />
-              </div>
-              <div class="holding-compact-field">
-                <label :for="`price-${holding.id}`">目前價格</label>
-                <FormattedNumberInput :id="`price-${holding.id}`" class="input input--amount" :model-value="displayPrice(holding)" :min="0.01" :max-fraction-digits="4" @update:model-value="priceDrafts[holding.id] = $event" @change="savePrice(holding, $event)" />
+                <FormattedNumberInput :id="`quantity-${holding.id}`" class="input input--amount" :model-value="displayQuantity(holding)" :min="0" :max-fraction-digits="8" @update:model-value="quantityDrafts[holding.id] = $event" @change="saveQuantity(holding, $event)" @keydown.enter="advanceHoldingQuantity(holding.id, $event)" @keydown.tab="advanceHoldingQuantity(holding.id, $event)" />
               </div>
               <div class="holding-compact-field">
                 <label :for="`leverage-${holding.id}`">商品槓桿倍數</label>
-                <input :id="`leverage-${holding.id}`" class="input input--amount" type="number" step="1" :value="displayLeverage(holding)" @input="leverageDrafts[holding.id] = $event.target.value" @change="saveLeverage(holding, $event.target.value)" />
+                <input :id="`leverage-${holding.id}`" class="input input--amount" type="number" step="1" tabindex="-1" :value="displayLeverage(holding)" @input="leverageDrafts[holding.id] = $event.target.value" @change="saveLeverage(holding, $event.target.value)" />
               </div>
-              <div class="holding-editor-status"><span>{{ compactMode ? '離開欄位即保存' : '離開欄位後自動保存；再按一次鉛筆可收合。' }}</span></div>
+              <div class="holding-editor-status"><span>輸入股數後按 Enter 或 Tab，會保存並前往下一筆；目前價格由 Yahoo Finance 更新。</span></div>
             </div>
             </Transition>
           </article>
@@ -475,7 +464,7 @@ async function confirmDeleteHolding(holding) {
 .holding-compact-summary span, .holding-compact-summary strong { max-width: 100%; overflow: hidden; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
 .holding-compact-summary span { color: var(--muted); font-size: .69rem; }
 .holding-compact-summary strong { color: var(--text); font-size: .78rem; }
-.holding-card--compact .holding-edit-fields { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-top: 8px; padding: 8px; }
+.holding-card--compact .holding-edit-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 8px; padding: 8px; }
 .holding-card--compact .holding-edit-fields label { overflow: hidden; font-size: .69rem; text-overflow: ellipsis; white-space: nowrap; }
 .holding-card--compact .holding-edit-fields .input { min-height: 36px; padding: 6px 7px; font-size: .78rem; }
 .holding-card--compact .holding-editor-status { min-height: 18px; }

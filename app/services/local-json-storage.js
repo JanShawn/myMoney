@@ -55,6 +55,15 @@ function configSummary(input) {
   }
 }
 
+function configLastModifiedAt(input, fallback = null) {
+  const value = toPlainConfig(input).settings?.lastSavedAt
+  return typeof value === 'string' && value ? value : fallback
+}
+
+export function resolveSyncVersionAt(remote, fallback = null) {
+  return remote?.summary?.lastSavedAt || remote?.metadata?.updatedAt || fallback
+}
+
 export function configFingerprint(input) {
   const text = JSON.stringify(toPlainConfig(input))
   let hash = 2166136261
@@ -429,6 +438,15 @@ async function writeSyncHandle(handle, document) {
     writable = await handle.createWritable()
     await writable.write(`${JSON.stringify(document, null, 2)}\n`)
     await writable.close()
+    const verified = await readSyncHandle(handle)
+    const expectedFingerprint = configFingerprint(document)
+    const expectedMetadata = normalizeSyncMetadata(document?._sync)
+    const metadataMatches = verified.metadata.revision === expectedMetadata.revision
+      && verified.metadata.updatedAt === expectedMetadata.updatedAt
+    if (verified.fingerprint !== expectedFingerprint || !metadataMatches) {
+      throw new Error('寫入後重新讀取的內容或同步版本不一致')
+    }
+    return verified
   } catch (error) {
     try { await writable?.abort?.() } catch { /* 保留原始寫入錯誤。 */ }
     throw new Error(`無法更新同步檔案：${error?.message || '檔案可能被鎖定或 Google Drive 尚未就緒'}。`)
@@ -459,6 +477,7 @@ async function getSyncFileStatus(currentInput) {
     permission: connected ? await querySyncPermission(handle) : 'unavailable',
     lastSyncedAt: meta.lastSyncedAt || null,
     lastRemoteUpdatedAt: meta.lastRemoteUpdatedAt || null,
+    revision: Math.max(0, Math.trunc(Number(meta.remoteRevision || 0))),
     hasLocalChanges: connected && meta.localFingerprint !== currentFingerprint
   }
 }
@@ -479,7 +498,7 @@ export async function connectExistingSyncFile(currentInput) {
   await saveSyncMeta({
     fileName: handle.name,
     lastSyncedAt: isSameData ? now : null,
-    lastRemoteUpdatedAt: remote.metadata.updatedAt || (remote.lastModified ? new Date(remote.lastModified).toISOString() : null),
+    lastRemoteUpdatedAt: resolveSyncVersionAt(remote, remote.lastModified ? new Date(remote.lastModified).toISOString() : null),
     lastRemoteFingerprint: remote.fingerprint,
     localFingerprint: isSameData ? localFingerprint : null,
     remoteRevision: remote.metadata.revision
@@ -488,7 +507,7 @@ export async function connectExistingSyncFile(currentInput) {
     fileName: handle.name,
     requiresImport: !isSameData,
     fingerprint: remote.fingerprint,
-    updatedAt: remote.metadata.updatedAt || (remote.lastModified ? new Date(remote.lastModified).toISOString() : null),
+    updatedAt: resolveSyncVersionAt(remote, remote.lastModified ? new Date(remote.lastModified).toISOString() : null),
     summary: remote.summary,
     changes: summarizeConfigChanges(currentInput, remote.data),
     hasUserData: remote.hasUserData,
@@ -502,21 +521,75 @@ export async function createNewSyncFile(currentInput) {
   await requireSyncPermission(handle)
   const now = new Date().toISOString()
   const fingerprint = configFingerprint(currentInput)
-  const metadata = { revision: 1, updatedAt: now, deviceId: await getSyncDeviceId() }
-  await writeSyncHandle(handle, createSyncFileDocument(currentInput, metadata))
+  const contentUpdatedAt = configLastModifiedAt(currentInput, now)
+  const metadata = { revision: 1, updatedAt: contentUpdatedAt, deviceId: await getSyncDeviceId() }
+  const verified = await writeSyncHandle(handle, createSyncFileDocument(currentInput, metadata))
   await dbSet(SYNC_FILE_HANDLE_KEY, handle)
   await saveSyncMeta({
     fileName: handle.name,
     lastSyncedAt: now,
-    lastRemoteUpdatedAt: now,
-    lastRemoteFingerprint: fingerprint,
+    lastRemoteUpdatedAt: resolveSyncVersionAt(verified, contentUpdatedAt),
+    lastRemoteFingerprint: verified.fingerprint,
     localFingerprint: fingerprint,
-    remoteRevision: metadata.revision
+    remoteRevision: verified.metadata.revision
   })
-  return { fileName: handle.name, syncStatus: await getSyncFileStatus(currentInput) }
+  return {
+    fileName: handle.name,
+    revision: verified.metadata.revision,
+    verifiedAt: now,
+    contentUpdatedAt: resolveSyncVersionAt(verified, contentUpdatedAt),
+    syncStatus: await getSyncFileStatus(currentInput)
+  }
+}
+
+async function overwriteChosenSyncFile(currentInput) {
+  if (!supportsFileSystemAccess()) throw new Error('此瀏覽器不支援固定同步檔案，請使用最新版 Chrome 或 Edge。')
+  const linkedHandle = await dbGet(SYNC_FILE_HANDLE_KEY)
+  const handle = await window.showSaveFilePicker({
+    suggestedName: linkedHandle?.name || SYNC_FILE_NAME,
+    types: JSON_FILE_TYPES
+  })
+  if (!handle) throw new DOMException('未選擇檔案', 'AbortError')
+  await requireSyncPermission(handle)
+
+  const selectedFile = await handle.getFile()
+  let selectedRevision = 0
+  if (selectedFile.size > 0) {
+    const selected = await readSyncHandle(handle)
+    selectedRevision = selected.metadata.revision
+  }
+
+  const meta = (await dbGet(SYNC_FILE_META_KEY)) || {}
+  const now = new Date().toISOString()
+  const fingerprint = configFingerprint(currentInput)
+  const revision = Math.max(selectedRevision, Number(meta.remoteRevision || 0)) + 1
+  const contentUpdatedAt = configLastModifiedAt(currentInput, now)
+  const metadata = { revision, updatedAt: contentUpdatedAt, deviceId: await getSyncDeviceId() }
+  const verified = await writeSyncHandle(handle, createSyncFileDocument(currentInput, metadata))
+
+  await dbSet(SYNC_FILE_HANDLE_KEY, handle)
+  await saveSyncMeta({
+    fileName: handle.name,
+    lastSyncedAt: now,
+    lastRemoteUpdatedAt: resolveSyncVersionAt(verified, contentUpdatedAt),
+    lastRemoteFingerprint: verified.fingerprint,
+    localFingerprint: fingerprint,
+    remoteRevision: verified.metadata.revision
+  })
+  return {
+    conflict: false,
+    unchanged: false,
+    manualOverwrite: true,
+    fileName: handle.name,
+    revision: verified.metadata.revision,
+    verifiedAt: now,
+    contentUpdatedAt: resolveSyncVersionAt(verified, contentUpdatedAt),
+    syncStatus: await getSyncFileStatus(currentInput)
+  }
 }
 
 export async function uploadToSyncFile(currentInput, options = {}) {
+  if (options.chooseFile) return overwriteChosenSyncFile(currentInput)
   const handle = await dbGet(SYNC_FILE_HANDLE_KEY)
   if (!handle) throw new Error('尚未連結同步檔案。')
   await requireSyncPermission(handle)
@@ -535,7 +608,7 @@ export async function uploadToSyncFile(currentInput, options = {}) {
     return {
       conflict: true,
       fileName: handle.name,
-      remoteUpdatedAt: remote.metadata.updatedAt || (remote.lastModified ? new Date(remote.lastModified).toISOString() : null),
+      remoteUpdatedAt: resolveSyncVersionAt(remote, remote.lastModified ? new Date(remote.lastModified).toISOString() : null),
       remoteSummary: remote.summary,
       changes: summarizeConfigChanges(currentInput, remote.data),
       syncStatus: await getSyncFileStatus(currentInput)
@@ -548,28 +621,33 @@ export async function uploadToSyncFile(currentInput, options = {}) {
       conflict: false,
       requiresPull: true,
       fileName: handle.name,
-      remoteUpdatedAt: remote.metadata.updatedAt || (remote.lastModified ? new Date(remote.lastModified).toISOString() : null),
+      remoteUpdatedAt: resolveSyncVersionAt(remote, remote.lastModified ? new Date(remote.lastModified).toISOString() : null),
       syncStatus: await getSyncFileStatus(currentInput)
     }
   }
 
-  const revision = Math.max(remote.metadata.revision, Number(meta.remoteRevision || 0)) + 1
+  let verifiedRemote = remote
   if (direction === 'push') {
-    const metadata = { revision, updatedAt: now, deviceId: await getSyncDeviceId() }
-    await writeSyncHandle(handle, createSyncFileDocument(currentInput, metadata))
+    const revision = Math.max(remote.metadata.revision, Number(meta.remoteRevision || 0)) + 1
+    const metadata = { revision, updatedAt: configLastModifiedAt(currentInput, now), deviceId: await getSyncDeviceId() }
+    verifiedRemote = await writeSyncHandle(handle, createSyncFileDocument(currentInput, metadata))
   }
+  const contentUpdatedAt = resolveSyncVersionAt(verifiedRemote, verifiedRemote.lastModified ? new Date(verifiedRemote.lastModified).toISOString() : now)
   await saveSyncMeta({
     fileName: handle.name,
     lastSyncedAt: now,
-    lastRemoteUpdatedAt: direction === 'current' ? (remote.metadata.updatedAt || now) : now,
-    lastRemoteFingerprint: localFingerprint,
+    lastRemoteUpdatedAt: contentUpdatedAt,
+    lastRemoteFingerprint: verifiedRemote.fingerprint,
     localFingerprint,
-    remoteRevision: direction === 'current' ? remote.metadata.revision : revision
+    remoteRevision: verifiedRemote.metadata.revision
   })
   return {
     conflict: false,
     unchanged: direction === 'current',
     fileName: handle.name,
+    revision: verifiedRemote.metadata.revision,
+    verifiedAt: now,
+    contentUpdatedAt,
     syncStatus: await getSyncFileStatus(currentInput)
   }
 }
@@ -582,7 +660,7 @@ export async function inspectLinkedSyncFile(currentInput) {
   return {
     fileName: handle.name,
     fingerprint: remote.fingerprint,
-    updatedAt: remote.metadata.updatedAt || (remote.lastModified ? new Date(remote.lastModified).toISOString() : null),
+    updatedAt: resolveSyncVersionAt(remote, remote.lastModified ? new Date(remote.lastModified).toISOString() : null),
     summary: remote.summary,
     changes: summarizeConfigChanges(currentInput, remote.data),
     hasUserData: remote.hasUserData
@@ -604,7 +682,7 @@ export async function importLinkedSyncFile(expectedFingerprint) {
   await saveSyncMeta({
     fileName: handle.name,
     lastSyncedAt: now,
-    lastRemoteUpdatedAt: remote.metadata.updatedAt || (remote.lastModified ? new Date(remote.lastModified).toISOString() : now),
+    lastRemoteUpdatedAt: resolveSyncVersionAt(remote, remote.lastModified ? new Date(remote.lastModified).toISOString() : now),
     lastRemoteFingerprint: remote.fingerprint,
     localFingerprint: remote.fingerprint,
     remoteRevision: remote.metadata.revision

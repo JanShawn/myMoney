@@ -82,6 +82,20 @@ describe('snapshot storage', () => {
     })
   })
 
+  it('保留待扣款／保留款的正負號', () => {
+    const config = normalizeConfig({
+      cashDrafts: { cash: { expectedAmount: 100, reservations: [
+        { label: '待扣款', amount: 30 },
+        { label: '待入帳', amount: -50 }
+      ] } }
+    })
+
+    expect(config.cashDrafts.cash.reservations).toEqual([
+      { label: '待扣款', amount: 30 },
+      { label: '待入帳', amount: -50 }
+    ])
+  })
+
   it('保留系統現金帳戶的最近驗算紀錄', () => {
     const config = normalizeConfig({
       items: [{

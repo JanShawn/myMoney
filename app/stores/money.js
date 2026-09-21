@@ -33,6 +33,7 @@ export const useMoneyStore = defineStore('money', () => {
       permission: 'unavailable',
       lastSyncedAt: null,
       lastRemoteUpdatedAt: null,
+      revision: 0,
       hasLocalChanges: false
     }
   })
@@ -62,6 +63,14 @@ export const useMoneyStore = defineStore('money', () => {
 
   function applyPersistResult(result) {
     applyStorageResult(result)
+  }
+
+  function applySyncResult(result) {
+    if (result.syncStatus) Object.assign(storageStatus.syncFile, result.syncStatus)
+    if (Number.isFinite(Number(result.revision))) storageStatus.syncFile.revision = Number(result.revision)
+    if (result.verifiedAt) storageStatus.syncFile.lastSyncedAt = result.verifiedAt
+    if (result.contentUpdatedAt) storageStatus.syncFile.lastRemoteUpdatedAt = result.contentUpdatedAt
+    if (result.verifiedAt && !result.conflict && !result.requiresPull) storageStatus.syncFile.hasLocalChanges = false
   }
 
   async function run(action) {
@@ -461,7 +470,7 @@ export const useMoneyStore = defineStore('money', () => {
       expectedAmount: Number(body.expectedAmount ?? body.baseAmount ?? 0),
       reservations: (body.reservations || []).map((reservation) => ({
         label: String(reservation.label || ''),
-        amount: Math.max(0, Number(reservation.amount || 0))
+        amount: Number(reservation.amount) || 0
       })),
       rows: (body.rows || []).map((row) => ({
         label: String(row.label || ''),
@@ -564,13 +573,13 @@ export const useMoneyStore = defineStore('money', () => {
   })
   const createSyncFile = () => run(async () => {
     const result = await createNewSyncFile(config.value)
-    Object.assign(storageStatus.syncFile, result.syncStatus)
+    applySyncResult(result)
     return result
   })
   const uploadSyncFile = (options) => run(async () => {
     const result = await uploadToSyncFile(config.value, options)
     if (result.data) applyStorageResult(result)
-    else Object.assign(storageStatus.syncFile, result.syncStatus)
+    else applySyncResult(result)
     return result
   })
   const previewSyncFile = () => run(() => inspectLinkedSyncFile(config.value))

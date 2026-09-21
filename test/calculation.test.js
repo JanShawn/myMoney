@@ -90,6 +90,26 @@ describe('calculateSummary', () => {
     expect(summary.availableCash).toBe(7000)
   })
 
+  it('負數保留款會提高可動用金額，但不改變總資產', () => {
+    const summary = calculateSummary({
+      settings: { cashReconciliationEnabled: true },
+      cashDrafts: { 'item-cash': { reservations: [
+        { label: '待扣款', amount: 3000 },
+        { label: '待入帳', amount: -5000 }
+      ] } },
+      items: [
+        { amount: 10000, exchangeRate: 1, currency: 'TWD', assetClass: 'cash', liquidity: 'available', includeInAssets: true, archived: false }
+      ],
+      holdings: []
+    })
+
+    expect(summary.totalAssets).toBe(10000)
+    expect(summary.reservedCash).toBe(-2000)
+    expect(summary.availableCash).toBe(12000)
+    expect(summary.availableAssets).toBe(12000)
+    expect(summary.restrictedCash).toBe(-2000)
+  })
+
   it('替舊版持倉補上可保存的顯示順序', () => {
     const config = normalizeConfig({
       groups: [],

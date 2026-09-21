@@ -133,17 +133,17 @@ function normalizeGroup(input = {}, fallbackOrder = 0) {
 }
 
 function normalizeCashDraft(input = {}) {
-  const legacyReservedAmount = Math.max(0, finiteNumber(input.reservedAmount))
+  const legacyReservedAmount = finiteNumber(input.reservedAmount)
   const reservations = Array.isArray(input.reservations)
     ? input.reservations
-    : legacyReservedAmount > 0
+    : legacyReservedAmount !== 0
       ? [{ label: '待扣款／保留款', amount: legacyReservedAmount }]
       : []
   return {
     expectedAmount: finiteNumber(input.expectedAmount ?? input.baseAmount),
     reservations: limitArray(reservations, CONFIG_LIMITS.maxCashDraftRows).map((reservation) => ({
       label: clipString(reservation?.label, CONFIG_LIMITS.maxNameLength),
-      amount: Math.max(0, finiteNumber(reservation?.amount))
+      amount: finiteNumber(reservation?.amount)
     })),
     rows: limitArray(input.rows, CONFIG_LIMITS.maxCashDraftRows).map((row) => {
       const amount = finiteNumber(row?.amount)
@@ -472,8 +472,8 @@ export function calculateSummary(config) {
   const reservedCash = config?.settings?.cashReconciliationEnabled === false
     ? 0
     : Array.isArray(cashDraft?.reservations)
-      ? cashDraft.reservations.reduce((sum, reservation) => sum + Math.max(0, finiteNumber(reservation?.amount)), 0)
-      : Math.max(0, finiteNumber(cashDraft?.reservedAmount))
+      ? cashDraft.reservations.reduce((sum, reservation) => sum + finiteNumber(reservation?.amount), 0)
+      : finiteNumber(cashDraft?.reservedAmount)
   const availableAssets = Math.max(0, availableAssetsBeforeReserve - reservedCash)
   const availableCash = Math.max(0, availableCashBeforeReserve - reservedCash)
   const restrictedCash = totalCash + totalForeign - availableCash

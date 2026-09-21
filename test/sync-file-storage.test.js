@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  configFingerprint, createSyncFileDocument, decideSyncDirection, hasSyncConflict, inspectSyncFileText
+  configFingerprint, createSyncFileDocument, decideSyncDirection, hasSyncConflict, inspectSyncFileText, resolveSyncVersionAt
 } from '../app/services/local-json-storage'
 import { createDefaultConfig } from '../app/services/money-domain'
 
@@ -33,6 +33,17 @@ describe('固定同步檔案', () => {
 
     expect(inspected.metadata).toEqual({ schemaVersion: 1, revision: 0, updatedAt: null, deviceId: '' })
     expect(inspected.fingerprint).toBe(configFingerprint(config))
+  })
+
+  it('以資料最後修改時間當作檔案版本', () => {
+    expect(resolveSyncVersionAt({
+      summary: { lastSavedAt: '2026-09-21T13:12:34.000Z' },
+      metadata: { updatedAt: '2026-09-21T14:30:00.000Z' }
+    })).toBe('2026-09-21T13:12:34.000Z')
+    expect(resolveSyncVersionAt({
+      summary: { lastSavedAt: null },
+      metadata: { updatedAt: '2026-09-21T14:30:00.000Z' }
+    })).toBe('2026-09-21T14:30:00.000Z')
   })
 
   it('拒絕無效同步內容', () => {

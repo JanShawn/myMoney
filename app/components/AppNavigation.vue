@@ -5,11 +5,14 @@ import { useMoneyStore } from '~/stores/money'
 const store = useMoneyStore()
 const { isDark, toggleTheme } = useTheme()
 const navigationStorage = computed(() => {
+  const sync = store.storageStatus.syncFile
+  if (sync.connected && !sync.hasLocalChanges) return { detail: '同步檔案已是最新版', state: 'current' }
+  if (sync.connected && sync.hasLocalChanges) return { detail: '有變更尚未寫入同步檔案', state: 'pending' }
   const backup = store.storageStatus.jsonBackup
   if (!backup.exists) return { detail: '尚未建立 JSON 備份', state: 'neutral' }
   if (backup.isCurrent) return { detail: 'JSON 備份已是最新版', state: 'current' }
   const count = backup.changes?.length || 0
-  return { detail: count ? `${count} 項變更尚未備份` : '有變更尚未備份', state: 'pending' }
+  return { detail: count ? `${count} 項變更尚未匯出至 JSON` : '有變更尚未匯出至 JSON', state: 'pending' }
 })
 const links = [
   { to: '/', label: '總覽', mobileLabel: '總覽', icon: BarChart3 },

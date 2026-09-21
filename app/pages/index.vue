@@ -168,7 +168,7 @@ const marketData = computed(() => ({
           <span>總資產 {{ displayMoney(store.summary?.totalAssets) }} · 負債 {{ displayMoney(store.summary?.totalLiabilities) }}</span>
         </div>
         <div class="overview-facts">
-          <div class="overview-fact"><div><Banknote :size="16" aria-hidden="true" /><span>可動用現金</span></div><strong>{{ displayMoney(store.summary?.availableCash) }}</strong><small>{{ (availableCashAssetRatio * 100).toFixed(1) }}% 總資產<span v-if="store.summary?.reservedCash"> · 已扣待扣款 {{ displayMoney(store.summary.reservedCash) }}</span></small></div>
+          <div class="overview-fact"><div><Banknote :size="16" aria-hidden="true" /><span>可動用現金</span></div><strong>{{ displayMoney(store.summary?.availableCash) }}</strong><small>{{ (availableCashAssetRatio * 100).toFixed(1) }}% 總資產<span v-if="store.summary?.reservedCash"> · 保留款淨額 {{ displayMoney(store.summary.reservedCash) }}</span></small></div>
           <div class="overview-fact"><div><TrendingUp :size="16" aria-hidden="true" /><span>持有股票</span></div><strong>{{ displayMoney(store.summary?.totalStocks) }}</strong><small>{{ ((store.summary?.stockRatio || 0) * 100).toFixed(1) }}% 總資產</small></div>
           <div class="overview-fact"><div><Landmark :size="16" aria-hidden="true" /><span>持有債券</span></div><strong>{{ displayMoney(store.summary?.totalBonds) }}</strong><small>{{ ((store.summary?.bondRatio || 0) * 100).toFixed(1) }}% 總資產</small></div>
           <div class="overview-fact overview-fact--date"><div><Clock3 :size="16" aria-hidden="true" /><span>上次資產盤點</span></div><strong>{{ dateTime(store.lastSnapshot?.verifiedAt) }}</strong><small>以最近保存的快照為準</small></div>

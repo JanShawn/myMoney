@@ -19,7 +19,9 @@ const lastReconciledText = computed(() => selected.value?.lastReconciledAt
 const signedAmount = (row) => (row.operation === 'subtract' ? -1 : 1) * Number(row.amount || 0)
 const formatIntegerInput = (value) => value === '' || value == null
   ? ''
-  : new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(Number(value) || 0)
+  : value === '-'
+    ? '-'
+    : new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(Number(value) || 0)
 const actualAmount = computed(() => rows.value.reduce((sum, row) => sum + signedAmount(row), 0))
 const reservedAmount = computed(() => reservations.value.reduce((sum, reservation) => sum + Number(reservation.amount || 0), 0))
 const difference = computed(() => actualAmount.value - Number(expectedAmount.value || 0))
@@ -62,10 +64,10 @@ function hydrateDraft(accountId) {
   const draft = store.config.cashDrafts?.[accountId]
   hydratingDraft.value = true
   expectedAmount.value = Math.max(0, Number(draft?.expectedAmount ?? draft?.baseAmount ?? item.amount ?? 0))
-  const legacyReservedAmount = Math.max(0, Number(draft?.reservedAmount || 0))
+  const legacyReservedAmount = Number(draft?.reservedAmount || 0)
   reservations.value = draft?.reservations?.length
-    ? draft.reservations.map((reservation) => createReservation(reservation.label || '', Math.max(0, Number(reservation.amount || 0)) || ''))
-    : legacyReservedAmount > 0
+    ? draft.reservations.map((reservation) => createReservation(reservation.label || '', Number(reservation.amount || 0) || ''))
+    : legacyReservedAmount !== 0
       ? [createReservation('待扣款／保留款', legacyReservedAmount)]
       : [createReservation()]
   rows.value = draft?.rows?.length
@@ -107,8 +109,14 @@ function updateExpectedAmount(event) {
 }
 function updateReservedAmount(reservation, event) {
   const raw = event.target.value
-  const sanitized = raw.includes('-') ? '0' : raw.split('.')[0].replace(/\D/g, '')
-  reservation.amount = sanitized ? Number(sanitized) : ''
+  const negative = raw.trimStart().startsWith('-')
+  const digits = raw.split('.')[0].replace(/\D/g, '')
+  if (!digits) {
+    reservation.amount = negative ? '-' : ''
+    event.target.value = negative ? '-' : ''
+    return
+  }
+  reservation.amount = Number(digits) * (negative ? -1 : 1)
   event.target.value = formatIntegerInput(reservation.amount)
 }
 function updateAdjustment(row, event) {
@@ -152,7 +160,7 @@ function draftPayload() {
     expectedAmount: Number(expectedAmount.value || 0),
     reservations: reservations.value.map((reservation) => ({
       label: reservation.label,
-      amount: Math.max(0, Number(reservation.amount || 0))
+      amount: Number(reservation.amount) || 0
     })),
     rows: rows.value.map((row) => ({
       label: row.label,
@@ -240,10 +248,10 @@ const money = (value) => new Intl.NumberFormat('zh-TW', { style: 'currency', cur
             <input id="cash-expected" :value="formatIntegerInput(expectedAmount)" class="input input--amount baseline-card__input" type="text" inputmode="numeric" pattern="[0-9,]*" @input="updateExpectedAmount" @keydown.tab="moveFromExpectedAmount" />
           </div>
           <div class="reservation-card">
-            <div class="reservation-heading"><div><span class="baseline-card__eyebrow">Available cash adjustment</span><h3>待扣款／保留款</h3><small>例如股票 T+2 交割款。合計只降低可動用現金，不參與下方驗算，也不改變總資產與淨資產。</small></div><strong>{{ money(reservedAmount) }}</strong></div>
+            <div class="reservation-heading"><div><span class="baseline-card__eyebrow">Available cash adjustment</span><h3>待扣款／保留款</h3><small>例如股票 T+2 交割款。正數會降低、負數會提高可動用現金；不參與下方驗算，也不改變總資產與淨資產。</small></div><strong>{{ money(reservedAmount) }}</strong></div>
             <div v-for="(reservation, index) in reservations" :key="reservation.id" class="reservation-row">
               <div class="field"><label :for="`cash-reserved-label-${reservation.id}`">保留款 {{ index + 1 }}</label><input :id="`cash-reserved-label-${reservation.id}`" v-model="reservation.label" class="input" placeholder="例如：2330 T+2 交割款" /></div>
-              <div class="field"><label :for="`cash-reserved-${reservation.id}`">金額</label><input :id="`cash-reserved-${reservation.id}`" :value="formatIntegerInput(reservation.amount)" class="input input--amount" type="text" inputmode="numeric" pattern="[0-9,]*" placeholder="0" @input="updateReservedAmount(reservation, $event)" @keydown.tab="moveFromReservedAmount(index, $event)" /></div>
+              <div class="field"><label :for="`cash-reserved-${reservation.id}`">金額</label><input :id="`cash-reserved-${reservation.id}`" :value="formatIntegerInput(reservation.amount)" class="input input--amount" type="text" inputmode="decimal" pattern="-?[0-9,]*" placeholder="正數扣除，負數加回" @input="updateReservedAmount(reservation, $event)" @keydown.tab="moveFromReservedAmount(index, $event)" /></div>
               <div class="reservation-actions"><button class="btn btn-ghost" type="button" :disabled="!Number(reservation.amount)" @click="reservation.amount = 0"><RotateCcw :size="15" />清為 0</button><button class="btn btn-ghost btn-icon remove-row" type="button" :aria-label="`刪除保留款 ${index + 1}`" :disabled="reservations.length === 1" @click="reservations.splice(index, 1)"><Trash2 :size="16" /></button></div>
             </div>
             <button class="btn btn-secondary reservation-add" type="button" @click="addReservation"><Plus :size="17" />新增保留款</button>
@@ -279,8 +287,8 @@ const money = (value) => new Intl.NumberFormat('zh-TW', { style: 'currency', cur
         <div class="comparison-summary">
           <div class="summary-item"><span class="summary-item__label">目前現金總額</span><strong class="summary-item__value">{{ money(expectedAmount) }}</strong></div>
           <div v-if="hasDetails" class="summary-item"><span class="summary-item__label">實際明細合計</span><strong class="summary-item__value">{{ money(actualAmount) }}</strong></div>
-          <div class="summary-item"><span class="summary-item__label">待扣款／保留款</span><strong class="summary-item__value negative">{{ money(reservedAmount) }}</strong></div>
-          <div class="summary-item summary-item--primary"><span class="summary-item__label">扣除後可動用現金</span><strong class="summary-item__value">{{ money(availableCashAfterReserve) }}</strong></div>
+          <div class="summary-item"><span class="summary-item__label">待扣款／保留款</span><strong class="summary-item__value" :class="{ negative: reservedAmount > 0 }">{{ money(reservedAmount) }}</strong></div>
+          <div class="summary-item summary-item--primary"><span class="summary-item__label">調整後可動用現金</span><strong class="summary-item__value">{{ money(availableCashAfterReserve) }}</strong></div>
         </div>
         <div class="comparison-result" :class="`comparison-result--${comparisonState.tone}`" role="status" aria-live="polite">
           <span>{{ hasDetails ? '驗算差額' : '目前採用金額' }}</span>
