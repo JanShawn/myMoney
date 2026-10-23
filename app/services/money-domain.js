@@ -1,6 +1,16 @@
 export const SYSTEM_CASH_GROUP_ID = 'group-cash'
 export const SYSTEM_CASH_ITEM_ID = 'item-cash'
 
+export const DEFAULT_EXPOSURE_THRESHOLDS = Object.freeze({ exposureWarningPercent: 80, exposureDangerPercent: 100 })
+
+export function normalizeExposureThresholds(input = {}) {
+  const warning = Number(input.exposureWarningPercent ?? DEFAULT_EXPOSURE_THRESHOLDS.exposureWarningPercent)
+  const danger = Number(input.exposureDangerPercent ?? DEFAULT_EXPOSURE_THRESHOLDS.exposureDangerPercent)
+  return Number.isFinite(warning) && Number.isFinite(danger) && warning > 0 && warning < danger && danger <= 1000
+    ? { exposureWarningPercent: warning, exposureDangerPercent: danger }
+    : { ...DEFAULT_EXPOSURE_THRESHOLDS }
+}
+
 export const CONFIG_LIMITS = Object.freeze({
   maxJsonBytes: 5 * 1024 * 1024,
   maxGroups: 200,
@@ -69,6 +79,7 @@ export function createDefaultConfig() {
       baseCurrency: 'TWD',
       snapshotDisplayLimit: 30,
       cashReconciliationEnabled: true,
+      ...DEFAULT_EXPOSURE_THRESHOLDS,
       lastSavedAt: null
     },
     groups: [
@@ -281,6 +292,7 @@ function normalizeSettings(input = {}, defaults) {
     baseCurrency: 'TWD',
     snapshotDisplayLimit: Math.min(365, Math.max(1, Math.trunc(finiteNumber(input.snapshotDisplayLimit, defaults.snapshotDisplayLimit)))),
     cashReconciliationEnabled: input.cashReconciliationEnabled !== false,
+    ...normalizeExposureThresholds(input),
     lastSavedAt: typeof input.lastSavedAt === 'string' ? clipString(input.lastSavedAt, 64) : null
   }
 }
@@ -462,6 +474,9 @@ export function calculateSummary(config) {
   const totalBonds = bondHoldings.reduce((sum, holding) => sum + holdingMarketValue(holding), 0)
   const totalStockExposure = stockHoldings.reduce((sum, holding) => sum + holdingExposure(holding), 0)
   const totalBondExposure = bondHoldings.reduce((sum, holding) => sum + holdingExposure(holding), 0)
+  const totalDoubleLeveragedStocks = stockHoldings
+    .filter((holding) => Number(holding.leverage ?? 1) === 2)
+    .reduce((sum, holding) => sum + holdingMarketValue(holding), 0)
   const totalCash = assets.filter((item) => item.assetClass === 'cash').reduce((sum, item) => sum + itemValue(item), 0)
   const totalForeign = assets.filter((item) => item.assetClass === 'foreign').reduce((sum, item) => sum + itemValue(item), 0)
   const availableAssetsBeforeReserve = assets.filter((item) => item.liquidity === 'available').reduce((sum, item) => sum + itemValue(item), 0)
@@ -487,10 +502,39 @@ export function calculateSummary(config) {
     totalBonds: round(totalBonds), bondRatio: totalAssets ? round(totalBonds / totalAssets, 6) : 0,
     totalStockExposure: round(totalStockExposure), totalBondExposure: round(totalBondExposure),
     stockExposureRatio: netWorth > 0 ? round(totalStockExposure / netWorth, 6) : null,
+    totalDoubleLeveragedStocks: round(totalDoubleLeveragedStocks),
+    doubleLeveragedStockRatio: netWorth > 0 ? round(totalDoubleLeveragedStocks / netWorth, 6) : null,
+    stockPositionLeverage: totalStocks > 0 ? round(totalStockExposure / totalStocks, 6) : null,
     totalInvestmentExposure: round(totalStockExposure + totalBondExposure),
     totalCash: round(totalCash), totalForeign: round(totalForeign),
     totalOther: round(Math.max(0, totalAssets - totalStocks - totalBonds - totalCash - totalForeign))
   }
+}
+
+export function calculateLeverageSignal(config) {
+  const summary = calculateSummary(config)
+  const thresholds = normalizeExposureThresholds(config?.settings)
+  const grossExposure = (config?.holdings || [])
+    .filter((holding) => !holding.archived && holding.assetClass === 'equity')
+    .reduce((sum, holding) => sum + Math.abs(holdingExposure(holding)), 0)
+  const ratio = summary.netWorth > 0 ? grossExposure / summary.netWorth : null
+  // Match the one-decimal percentage shown on the dashboard at alert boundaries.
+  const exposurePercent = ratio == null ? null : round(ratio * 100, 1)
+  const base = { ...thresholds, grossExposure: round(grossExposure), ratio }
+
+  if (summary.netWorth <= 0) {
+    return summary.totalAssets > 0 || summary.totalLiabilities > 0
+      ? { ...base, level: 'danger', label: '高度警戒', reason: '已登錄淨資產不大於 0，請先檢查資產與負債。' }
+      : { ...base, level: 'idle', label: '尚無資料', reason: '新增資產與股票持倉後，這裡會顯示槓桿訊號。' }
+  }
+  if (summary.totalStocks <= 0) return { ...base, level: 'idle', label: '無股票部位', reason: '目前沒有股票曝險可供判斷。' }
+  if (exposurePercent >= thresholds.exposureDangerPercent) {
+    return { ...base, level: 'danger', label: '高度警戒', reason: '股票總曝險已達高度警戒線，請檢查部位與借款。' }
+  }
+  if (exposurePercent >= thresholds.exposureWarningPercent) {
+    return { ...base, level: 'warning', label: '接近上限', reason: '股票總曝險已達警戒線，加碼前先確認可承受的損失。' }
+  }
+  return { ...base, level: 'normal', label: '未達警戒', reason: '目前股票總曝險低於你設定的警戒線。' }
 }
 
 export function upsertSnapshot(snapshots, snapshot) {

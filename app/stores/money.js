@@ -361,8 +361,16 @@ export const useMoneyStore = defineStore('money', () => {
 
   const updateSettings = (body) => mutate((draft) => {
     const allowed = {}
-    for (const key of ['baseCurrency', 'snapshotDisplayLimit', 'cashReconciliationEnabled', 'lastSavedAt']) {
+    for (const key of ['baseCurrency', 'snapshotDisplayLimit', 'cashReconciliationEnabled', 'exposureWarningPercent', 'exposureDangerPercent', 'lastSavedAt']) {
       if (Object.hasOwn(body, key)) allowed[key] = body[key]
+    }
+    if (Object.hasOwn(allowed, 'exposureWarningPercent') || Object.hasOwn(allowed, 'exposureDangerPercent')) {
+      const warning = Number(allowed.exposureWarningPercent ?? draft.settings.exposureWarningPercent ?? 80)
+      const danger = Number(allowed.exposureDangerPercent ?? draft.settings.exposureDangerPercent ?? 100)
+      if (!Number.isFinite(warning) || !Number.isFinite(danger) || warning <= 0 || warning >= danger || danger > 1000) {
+        throw new Error('警戒線須大於 0%、低於高度警戒線，且高度警戒線不得超過 1000%。')
+      }
+      Object.assign(allowed, { exposureWarningPercent: warning, exposureDangerPercent: danger })
     }
     Object.assign(draft.settings, allowed)
     if (Object.hasOwn(allowed, 'cashReconciliationEnabled')) Object.assign(draft, normalizeConfig(draft))

@@ -1,6 +1,7 @@
 <script setup>
-import { Banknote, ChevronLeft, ChevronRight, Clock3, Eye, EyeOff, Landmark, Trash2, TrendingUp, Wallet } from '@lucide/vue'
+import { AlertCircle, Banknote, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Eye, EyeOff, Landmark, Trash2, TrendingUp, TriangleAlert, Wallet } from '@lucide/vue'
 import { useMoneyStore } from '~/stores/money'
+import { calculateLeverageSignal } from '~/services/money-domain'
 
 const store = useMoneyStore()
 const { showToast } = useToast()
@@ -10,6 +11,8 @@ const chartColors = computed(() => isDark.value
   : { cash: '#5bb9ad', stocks: '#0f766e', bonds: '#0369a1', other: '#9db7b2', debt: '#d77a70', stockAlt: '#0ea5a4', market: '#0369a1', ma: '#d18432', fill: 'rgba(15,118,110,.12)' })
 const money = (value) => new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', maximumFractionDigits: 0 }).format(value || 0)
 const number = (value) => new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 2 }).format(Number(value) || 0)
+const percent = (value) => value == null ? '—' : `${(Number(value) * 100).toFixed(1)}%`
+const leverage = (value) => value == null ? '—' : `${Number(value).toFixed(2)}×`
 const dateTime = (value) => value ? new Intl.DateTimeFormat('zh-TW', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '尚未完成驗算'
 const pendingDeleteDate = ref('')
 const hideAmounts = ref(false)
@@ -33,23 +36,36 @@ const chartSnapshots = computed(() => {
 const hasTrendData = computed(() => chartSnapshots.value.length >= 2)
 const hasSnapshotData = computed(() => chartSnapshots.value.length >= 1)
 const hasAllocationData = computed(() => Number(store.summary?.totalAssets) > 0 || Number(store.summary?.totalLiabilities) > 0)
-const allocationBase = computed(() => Number(store.summary?.availableCash || 0) + Number(store.summary?.totalStocks || 0) + Number(store.summary?.totalBonds || 0))
-const investedAmount = computed(() => Number(store.summary?.totalStocks || 0) + Number(store.summary?.totalBonds || 0))
-const investmentExposure = computed(() => Number(store.summary?.totalInvestmentExposure || 0))
 const availableCashAssetRatio = computed(() => Number(store.summary?.totalAssets) ? Number(store.summary?.availableCash || 0) / Number(store.summary.totalAssets) : 0)
-const weightedLeverage = computed(() => investedAmount.value ? investmentExposure.value / investedAmount.value : 0)
-const stockAllocation = computed(() => {
-  const current = Number(store.summary?.totalStocks || 0)
-  const exposure = Number(store.summary?.totalStockExposure || 0)
-  const exposureRatio = store.summary?.stockExposureRatio
-  return {
-    current,
-    exposure,
-    ratio: allocationBase.value ? current / allocationBase.value : 0,
-    exposureRatio: exposureRatio == null ? null : Number(exposureRatio),
-    positionLeverage: current ? exposure / current : 0
+const hasStockHoldings = computed(() => Number(store.summary?.totalStocks) > 0)
+const leverageSignal = computed(() => calculateLeverageSignal(store.config))
+const signalIcon = computed(() => ({ normal: CheckCircle2, warning: TriangleAlert, danger: AlertCircle, idle: Clock3 }[leverageSignal.value.level]))
+const editingThresholds = ref(false)
+const thresholdError = ref('')
+const thresholdDraft = reactive({ warning: 80, danger: 100 })
+
+function editThresholds() {
+  Object.assign(thresholdDraft, { warning: leverageSignal.value.exposureWarningPercent, danger: leverageSignal.value.exposureDangerPercent })
+  thresholdError.value = ''
+  editingThresholds.value = true
+}
+
+async function saveThresholds() {
+  const warning = Number(thresholdDraft.warning)
+  const danger = Number(thresholdDraft.danger)
+  if (!Number.isFinite(warning) || !Number.isFinite(danger) || warning <= 0 || warning >= danger || danger > 1000) {
+    thresholdError.value = '警戒線須大於 0%、低於高度警戒線，且高度警戒線不得超過 1000%。'
+    return
   }
-})
+  try {
+    await store.updateSettings({ exposureWarningPercent: warning, exposureDangerPercent: danger })
+    editingThresholds.value = false
+    showToast({ tone: 'success', title: '槓桿警戒線已保存' })
+  } catch (error) {
+    store.error = ''
+    thresholdError.value = error?.message || '無法保存警戒線，請再試一次。'
+  }
+}
 const recordYears = computed(() => [...new Set(store.snapshots
   .map((record) => String(record.date || '').slice(0, 4))
   .filter((year) => /^\d{4}$/.test(year)))].sort((left, right) => right.localeCompare(left)))
@@ -163,7 +179,7 @@ const marketData = computed(() => ({
     <template v-else>
       <section class="overview-summary" aria-label="資產摘要">
         <div class="overview-net-worth">
-          <div class="overview-net-worth__label"><Wallet :size="18" aria-hidden="true" /><span>目前淨資產</span></div>
+          <div class="overview-net-worth__label"><Wallet :size="18" aria-hidden="true" /><span>已登錄淨資產</span></div>
           <strong>{{ displayMoney(store.summary?.netWorth) }}</strong>
           <span>總資產 {{ displayMoney(store.summary?.totalAssets) }} · 負債 {{ displayMoney(store.summary?.totalLiabilities) }}</span>
         </div>
@@ -175,23 +191,43 @@ const marketData = computed(() => ({
         </div>
       </section>
 
-      <UiPanel class="space-before allocation-panel" title="曝險比例" description="聚焦部位加權與股票的實際淨曝險。" compact>
-        <div class="allocation-current">
-          <div class="position-leverage-summary" :class="{ negative: weightedLeverage < 0 }">
-            <div><span>部位加權</span><small>淨曝險值 ÷ 股票與債券市值</small></div>
-            <strong>{{ weightedLeverage.toFixed(2) }}×</strong>
+      <UiPanel class="space-before allocation-panel" title="槓桿訊號" compact>
+        <template #action><button class="btn btn-secondary signal-settings-button" type="button" :aria-expanded="editingThresholds" aria-controls="exposure-thresholds" @click="editingThresholds ? editingThresholds = false : editThresholds()">{{ editingThresholds ? '收起設定' : '調整警戒線' }}</button></template>
+        <div class="leverage-signal" :class="`leverage-signal--${leverageSignal.level}`" role="status" aria-live="polite" aria-atomic="true">
+          <div class="leverage-signal__main" :title="leverageSignal.reason">
+            <component :is="signalIcon" :size="20" aria-hidden="true" />
+            <strong>{{ leverageSignal.label }}</strong>
           </div>
-
-          <div v-if="allocationBase" class="allocation-table">
-            <section class="stock-allocation-row" aria-labelledby="stock-allocation-title">
-              <div class="allocation-identity"><h3 id="stock-allocation-title">股票市值</h3><strong>{{ displayMoney(stockAllocation?.current) }}</strong><small>市值配置 {{ ((stockAllocation?.ratio || 0) * 100).toFixed(1) }}%</small></div>
-              <div class="allocation-stat" :class="{ negative: stockAllocation?.exposureRatio < 0 }"><span>淨曝險比例<small>淨曝險 ÷ 淨資產</small></span><strong>{{ stockAllocation?.exposureRatio == null ? '—' : `${(stockAllocation.exposureRatio * 100).toFixed(1)}%` }}</strong></div>
-              <div class="allocation-stat"><span>淨曝險值</span><strong>{{ displayMoney(stockAllocation?.exposure) }}</strong></div>
-              <div class="allocation-stat"><span>商品加權槓桿</span><strong>{{ (stockAllocation?.positionLeverage || 0).toFixed(2) }}×</strong></div>
-            </section>
-          </div>
-          <AppNotice v-if="!allocationBase" title="還沒有可試算的配置">建立現金帳戶或投資持倉後，這裡會自動顯示淨曝險比例。</AppNotice>
+          <div class="leverage-signal__value"><span>股票總曝險</span><strong>{{ percent(leverageSignal.ratio) }}</strong></div>
+          <span class="leverage-signal__thresholds">警戒 {{ leverageSignal.exposureWarningPercent }}% · 高度警戒 {{ leverageSignal.exposureDangerPercent }}%</span>
         </div>
+        <form v-if="editingThresholds" id="exposure-thresholds" class="signal-settings" @submit.prevent="saveThresholds">
+          <div class="field"><label for="exposure-warning">警戒線（%）</label><input id="exposure-warning" v-model="thresholdDraft.warning" class="input" type="number" min="0.1" max="999.9" step="any" required :disabled="store.saving" :aria-invalid="Boolean(thresholdError)" aria-describedby="exposure-threshold-note" /></div>
+          <div class="field"><label for="exposure-danger">高度警戒線（%）</label><input id="exposure-danger" v-model="thresholdDraft.danger" class="input" type="number" min="0.1" max="1000" step="any" required :disabled="store.saving" :aria-invalid="Boolean(thresholdError)" aria-describedby="exposure-threshold-note" /></div>
+          <div class="signal-settings__actions"><button class="btn btn-primary" type="submit" :disabled="store.saving">{{ store.saving ? '保存中…' : '保存門檻' }}</button><button class="btn btn-secondary" type="button" :disabled="store.saving" @click="editingThresholds = false">取消</button></div>
+          <p id="exposure-threshold-note" class="signal-settings__note">這是你自訂的提醒門檻，可隨資金用途調整。</p>
+          <p v-if="thresholdError" class="signal-settings__error" role="alert">{{ thresholdError }}</p>
+        </form>
+        <div class="exposure-grid">
+          <section class="exposure-metric" aria-labelledby="stock-exposure-title">
+            <h3 id="stock-exposure-title" title="股票淨曝險 ÷ 已登錄淨資產">股票淨曝險</h3>
+            <strong :class="{ negative: store.summary?.stockExposureRatio < 0 }">{{ percent(store.summary?.stockExposureRatio) }}</strong>
+          </section>
+          <section class="exposure-metric" aria-labelledby="double-leveraged-title">
+            <h3 id="double-leveraged-title" title="正二部位市值 ÷ 已登錄淨資產">正二占比</h3>
+            <strong>{{ percent(store.summary?.doubleLeveragedStockRatio) }}</strong>
+          </section>
+          <section class="exposure-metric" aria-labelledby="stock-leverage-title">
+            <h3 id="stock-leverage-title" title="股票商品平均槓桿：股票淨曝險 ÷ 股票市值">商品平均槓桿</h3>
+            <strong :class="{ negative: store.summary?.stockPositionLeverage < 0 }">{{ leverage(store.summary?.stockPositionLeverage) }}</strong>
+          </section>
+        </div>
+        <div class="exposure-footer">
+          <p class="exposure-basis">已登錄淨資產 <strong>{{ displayMoney(store.summary?.netWorth) }}</strong></p>
+          <p class="signal-scope">自訂門檻 · 不含收支與債券風險</p>
+        </div>
+        <AppNotice v-if="Number(store.summary?.netWorth) <= 0" title="淨資產須大於 0 才能計算比例">股票淨曝險比例與正二占比暫以「—」顯示。</AppNotice>
+        <AppNotice v-else-if="!hasStockHoldings" title="目前沒有股票持倉">新增股票或股票 ETF 後，這裡會自動彙整曝險與商品槓桿。</AppNotice>
       </UiPanel>
 
       <AppNotice v-if="store.snapshots.length < 2" title="趨勢資料還在累積" class="space-before">完成至少兩次不同日期的盤點後，圖表就會開始有意義；現在可以先建立第一個基準點。</AppNotice>
@@ -291,22 +327,37 @@ const marketData = computed(() => ({
 .overview-fact > strong { display: block; overflow-wrap: anywhere; margin-top: 8px; color: var(--text); font-size: 1.08rem; font-variant-numeric: tabular-nums; }
 .overview-fact > small { display: block; margin-top: 3px; color: var(--muted); font-size: .75rem; }
 .overview-fact--date > strong { font-size: .88rem; line-height: 1.35; }
-.allocation-current { display: grid; gap: 0; }
-.position-leverage-summary { display: flex; align-items: center; justify-content: flex-start; gap: 14px; padding: 0 0 13px; border-bottom: 1px solid var(--border); }
-.position-leverage-summary > div { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; }
-.position-leverage-summary span { color: var(--text-soft); font-size: .8rem; font-weight: 760; }
-.position-leverage-summary small { color: var(--muted); font-size: .76rem; }
-.position-leverage-summary > strong { color: var(--primary); font-size: 1.55rem; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -.035em; }
-.position-leverage-summary.negative > strong { color: var(--danger); }
-.stock-allocation-row { display: grid; grid-template-columns: minmax(185px, 1.15fr) repeat(3, minmax(0, 1fr)); align-items: center; padding-top: 13px; }
-.allocation-identity { display: grid; gap: 3px; padding-right: 16px; }
-.allocation-identity h3 { margin: 0; color: var(--text); font-size: .8rem; }
-.allocation-identity strong { font-size: 1.08rem; font-variant-numeric: tabular-nums; }
-.allocation-identity small { color: var(--muted); font-size: .75rem; }
-.allocation-stat { display: grid; gap: 4px; min-width: 0; padding-left: 16px; border-left: 1px solid var(--border); }
-.allocation-stat span { color: var(--muted); font-size: .75rem; font-weight: 700; }
-.allocation-stat span small { display: block; margin-top: 2px; color: var(--muted); font-size: .68rem; font-weight: 500; }
-.allocation-stat strong { color: var(--primary); font-size: .94rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.allocation-panel :deep(.panel__header) { align-items: center; padding: 12px 16px 0; }
+.allocation-panel :deep(.section-title) { margin: 0; font-size: .9rem; }
+.allocation-panel :deep(.panel__body) { padding: 10px 16px 12px; }
+.signal-settings-button { min-height: 28px; padding: 3px 8px; font-size: .7rem; }
+.leverage-signal { display: flex; align-items: center; gap: 20px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--muted); background: var(--surface-muted); }
+.leverage-signal--normal { color: var(--success); background: var(--success-soft); border-color: var(--success-border); }
+.leverage-signal--warning { color: var(--warning); background: var(--warning-soft); border-color: var(--warning-border); }
+.leverage-signal--danger { color: var(--danger); background: var(--danger-soft); border-color: var(--danger-border); }
+.leverage-signal__main { display: flex; flex: 1; align-items: center; gap: 8px; min-width: 0; }
+.leverage-signal__main > svg { flex-shrink: 0; }
+.leverage-signal__main strong { font-size: 1rem; line-height: 1.3; white-space: nowrap; }
+.leverage-signal__value { display: flex; align-items: baseline; gap: 8px; flex-shrink: 0; }
+.leverage-signal__value span { color: var(--text-soft); font-size: .72rem; }
+.leverage-signal__value strong { font-size: 1.25rem; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.leverage-signal__thresholds { color: var(--text-soft); font-size: .7rem; line-height: 1.5; }
+.signal-settings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)) auto; align-items: end; gap: 10px; padding: 12px; margin-top: 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.signal-settings__actions { display: flex; gap: 7px; }
+.signal-settings__note, .signal-settings__error { grid-column: 1 / -1; margin: 0; font-size: .75rem; line-height: 1.5; }
+.signal-settings__note { color: var(--muted); }
+.signal-settings__error { color: var(--danger); }
+.signal-scope { margin: 0; color: var(--muted); font-size: .68rem; line-height: 1.6; }
+.exposure-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 14px; }
+.exposure-metric { min-width: 0; padding: 0 16px; border-left: 1px solid var(--border); }
+.exposure-metric:first-child { padding-left: 0; border-left: 0; }
+.exposure-metric:last-child { padding-right: 0; }
+.exposure-metric h3 { margin: 0; color: var(--muted); font-size: .72rem; font-weight: 650; }
+.exposure-metric > strong { display: block; margin-top: 5px; color: var(--text); font-size: 1.35rem; line-height: 1.2; letter-spacing: -.025em; font-variant-numeric: tabular-nums; }
+.exposure-metric > strong.negative { color: var(--danger); }
+.exposure-footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 16px; margin-top: 12px; padding-top: 9px; border-top: 1px solid var(--border); }
+.exposure-basis { margin: 0; color: var(--muted); font-size: .68rem; line-height: 1.6; }
+.exposure-basis strong { color: var(--text-soft); font-weight: 650; font-variant-numeric: tabular-nums; }
 .market-history-panel :deep(.panel__body) { display: grid; gap: 12px; }
 .year-pager { display: grid; grid-template-columns: 28px auto auto 28px; align-items: center; gap: 4px; min-height: 28px; padding: 1px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-muted); }
 .year-pager strong { color: var(--text); font-size: .74rem; white-space: nowrap; }
@@ -332,11 +383,6 @@ const marketData = computed(() => ({
 .record-detail__actions .btn-icon { color: var(--muted); }
 .record-detail__actions .btn-icon:hover { background: var(--danger-soft); color: var(--danger); }
 .record-detail-empty { margin: 0; color: var(--muted); font-size: .76rem; }
-@media (max-width: 1120px) {
-  .stock-allocation-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .allocation-identity { grid-column: 1 / -1; margin-bottom: 11px; padding: 0 0 11px; border-bottom: 1px solid var(--border); }
-  .allocation-stat:nth-child(2) { padding-left: 0; border-left: 0; }
-}
 @media (max-width: 620px) {
   .dashboard-actions { width: 100%; }
   .dashboard-actions .btn { flex: 1; }
@@ -344,12 +390,17 @@ const marketData = computed(() => ({
   .overview-net-worth { min-height: 138px; padding: 18px; }
   .overview-fact { padding: 13px 14px; }
   .overview-fact:nth-child(odd) { border-left: 0; }
-  .position-leverage-summary { align-items: flex-start; }
-  .position-leverage-summary > div { display: grid; gap: 3px; }
-  .stock-allocation-row { grid-template-columns: 1fr; }
-  .allocation-identity { margin-bottom: 0; padding: 0 0 10px; }
-  .allocation-stat { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 9px 0; border-left: 0; border-bottom: 1px solid var(--border); }
-  .allocation-stat:last-child { border-bottom: 0; }
+  .exposure-metric { padding: 0 8px; }
+  .exposure-metric h3 { font-size: .68rem; }
+  .exposure-metric > strong { font-size: 1.2rem; }
+  .leverage-signal { flex-wrap: wrap; gap: 7px 10px; }
+  .leverage-signal__main strong { font-size: .9rem; }
+  .leverage-signal__value { gap: 5px; }
+  .leverage-signal__value span { font-size: .66rem; }
+  .leverage-signal__value strong { font-size: 1.15rem; }
+  .leverage-signal__thresholds { flex-basis: 100%; font-size: .66rem; }
+  .signal-settings { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .signal-settings__actions { grid-column: 1 / -1; }
   .month-board { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .record-detail { flex-direction: column; }
   .market-history-panel :deep(.panel__header) { flex-direction: column; }

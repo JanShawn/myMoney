@@ -36,12 +36,16 @@ describe('GitHub 範例資料', () => {
       totalStockExposure: 204000,
       totalBondExposure: 52000,
       stockExposureRatio: 0.218322,
+      totalDoubleLeveragedStocks: 0,
+      doubleLeveragedStockRatio: 0,
+      stockPositionLeverage: 1,
       totalInvestmentExposure: 256000,
       totalCash: 756200,
       totalForeign: 102200,
       totalOther: 0
     })
-    const { totalStockExposure, totalBondExposure, stockExposureRatio, totalInvestmentExposure, reservedCash, ...historicalSummary } = summary
+    const { totalStockExposure, totalBondExposure, stockExposureRatio, totalInvestmentExposure, reservedCash,
+      totalDoubleLeveragedStocks, doubleLeveragedStockRatio, stockPositionLeverage, ...historicalSummary } = summary
     expect(latestSnapshot).toMatchObject(historicalSummary)
   })
 

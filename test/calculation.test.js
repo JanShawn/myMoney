@@ -76,6 +76,54 @@ describe('calculateSummary', () => {
     expect(summary.restrictedCash).toBe(6500)
   })
 
+  it('正二占比使用市值，股票平均槓桿不混入債券或借款', () => {
+    const summary = calculateSummary({
+      items: [
+        { amount: 100000, currency: 'TWD', assetClass: 'cash', includeInAssets: true },
+        { amount: 50000, currency: 'TWD', assetClass: 'liability' }
+      ],
+      holdings: [
+        { quantity: 900, price: 100, leverage: 1, assetClass: 'equity' },
+        { quantity: 100, price: 100, leverage: 2, assetClass: 'equity' },
+        { quantity: 1000, price: 100, leverage: 2, assetClass: 'bond' },
+        { quantity: 1000, price: 100, leverage: 2, assetClass: 'equity', archived: true }
+      ]
+    })
+
+    expect(summary.netWorth).toBe(250000)
+    expect(summary.totalStockExposure).toBe(110000)
+    expect(summary.stockExposureRatio).toBe(0.44)
+    expect(summary.totalDoubleLeveragedStocks).toBe(10000)
+    expect(summary.doubleLeveragedStockRatio).toBe(0.04)
+    expect(summary.stockPositionLeverage).toBe(1.1)
+  })
+
+  it('反向商品抵銷淨曝險時顯示零倍，不誤列為正二部位', () => {
+    const summary = calculateSummary({
+      items: [],
+      holdings: [
+        { quantity: 200, price: 100, leverage: 1, assetClass: 'equity' },
+        { quantity: 100, price: 100, leverage: -2, assetClass: 'equity' }
+      ]
+    })
+
+    expect(summary.stockExposureRatio).toBe(0)
+    expect(summary.stockPositionLeverage).toBe(0)
+    expect(summary.totalDoubleLeveragedStocks).toBe(0)
+    expect(summary.doubleLeveragedStockRatio).toBe(0)
+  })
+
+  it('只有現金時正二占比為零，尚無股票商品平均槓桿', () => {
+    const summary = calculateSummary({
+      items: [{ amount: 10000, currency: 'TWD', assetClass: 'cash', includeInAssets: true }],
+      holdings: []
+    })
+
+    expect(summary.stockExposureRatio).toBe(0)
+    expect(summary.doubleLeveragedStockRatio).toBe(0)
+    expect(summary.stockPositionLeverage).toBeNull()
+  })
+
   it('計算時仍相容舊版單一待扣款金額', () => {
     const summary = calculateSummary({
       settings: { cashReconciliationEnabled: true },
@@ -157,6 +205,7 @@ describe('calculateSummary', () => {
 
     expect(summary.netWorth).toBe(0)
     expect(summary.stockExposureRatio).toBeNull()
+    expect(summary.doubleLeveragedStockRatio).toBeNull()
   })
 
   it('持倉資產類別只保留股票與債券', () => {
