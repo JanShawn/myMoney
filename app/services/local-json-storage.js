@@ -316,7 +316,7 @@ async function addBackup(data) {
   await dbSet(BACKUPS_KEY, backups.slice(-BACKUP_LIMIT))
 }
 
-const SYNC_FILE_NAME = 'myMoney-sync.json'
+const SYNC_FILE_NAME = 'myMoney-data.json'
 const JSON_FILE_TYPES = [{ description: 'myMoney JSON 資料', accept: { 'application/json': ['.json'] } }]
 
 export function createJsonBackupFileName(date = new Date()) {
@@ -420,7 +420,7 @@ async function requireSyncPermission(handle, mode = 'readwrite') {
   const requested = typeof handle?.requestPermission === 'function'
     ? await handle.requestPermission({ mode })
     : 'denied'
-  if (requested !== 'granted') throw new Error('未取得同步檔案權限；瀏覽器資料仍會照常自動保存。')
+  if (requested !== 'granted') throw new Error('未取得檔案讀寫權限；瀏覽器資料仍會照常自動保存。')
 }
 
 async function readSyncHandle(handle) {
@@ -449,7 +449,7 @@ async function writeSyncHandle(handle, document) {
     return verified
   } catch (error) {
     try { await writable?.abort?.() } catch { /* 保留原始寫入錯誤。 */ }
-    throw new Error(`無法更新同步檔案：${error?.message || '檔案可能被鎖定或 Google Drive 尚未就緒'}。`)
+    throw new Error(`無法更新 JSON 檔案：${error?.message || '檔案可能被其他程式占用或同步資料夾尚未就緒'}。`)
   }
 }
 
@@ -544,9 +544,8 @@ export async function createNewSyncFile(currentInput) {
 
 async function overwriteChosenSyncFile(currentInput) {
   if (!supportsFileSystemAccess()) throw new Error('此瀏覽器不支援固定同步檔案，請使用最新版 Chrome 或 Edge。')
-  const linkedHandle = await dbGet(SYNC_FILE_HANDLE_KEY)
   const handle = await window.showSaveFilePicker({
-    suggestedName: linkedHandle?.name || SYNC_FILE_NAME,
+    suggestedName: SYNC_FILE_NAME,
     types: JSON_FILE_TYPES
   })
   if (!handle) throw new DOMException('未選擇檔案', 'AbortError')
@@ -559,23 +558,14 @@ async function overwriteChosenSyncFile(currentInput) {
     selectedRevision = selected.metadata.revision
   }
 
-  const meta = (await dbGet(SYNC_FILE_META_KEY)) || {}
   const now = new Date().toISOString()
-  const fingerprint = configFingerprint(currentInput)
-  const revision = Math.max(selectedRevision, Number(meta.remoteRevision || 0)) + 1
+  const revision = selectedRevision + 1
   const contentUpdatedAt = configLastModifiedAt(currentInput, now)
   const metadata = { revision, updatedAt: contentUpdatedAt, deviceId: await getSyncDeviceId() }
   const verified = await writeSyncHandle(handle, createSyncFileDocument(currentInput, metadata))
 
-  await dbSet(SYNC_FILE_HANDLE_KEY, handle)
-  await saveSyncMeta({
-    fileName: handle.name,
-    lastSyncedAt: now,
-    lastRemoteUpdatedAt: resolveSyncVersionAt(verified, contentUpdatedAt),
-    lastRemoteFingerprint: verified.fingerprint,
-    localFingerprint: fingerprint,
-    remoteRevision: verified.metadata.revision
-  })
+  await dbDelete(SYNC_FILE_HANDLE_KEY)
+  await dbDelete(SYNC_FILE_META_KEY)
   return {
     conflict: false,
     unchanged: false,

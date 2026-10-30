@@ -14,6 +14,7 @@ const form = reactive({ticker: ''})
 const tickerInput = ref(null)
 const stockLookupLoading = ref(false)
 const resetDialogOpen = ref(false)
+const clearListDialogOpen = ref(false)
 const pendingDeleteId = ref('')
 const priceDrafts = reactive({})
 const quantityDrafts = reactive({})
@@ -251,6 +252,7 @@ async function addStock() {
     tickerInput.value?.focus()
     return
   }
+  let shouldFocusTicker = false
   stockLookupLoading.value = true
   try {
     const instrument = await store.lookupStockName(form.ticker)
@@ -259,13 +261,12 @@ async function addStock() {
       name: instrument.name,
     })
     form.ticker = ''
+    shouldFocusTicker = true
     showToast({
       tone: 'success',
       title: '已加入待買清單',
       message: `「${item.ticker} · ${item.name}」會持續保留，直到你刪除它。`,
     })
-    await nextTick()
-    tickerInput.value?.focus()
   } catch (error) {
     store.error = ''
     showToast({
@@ -275,6 +276,10 @@ async function addStock() {
     })
   } finally {
     stockLookupLoading.value = false
+    if (shouldFocusTicker) {
+      await nextTick()
+      tickerInput.value?.focus({preventScroll: true})
+    }
   }
 }
 
@@ -513,6 +518,34 @@ async function confirmDelete() {
     })
   }
 }
+
+async function confirmClearList() {
+  const itemCount = store.stockBuyList.length
+  if (!itemCount) {
+    clearListDialogOpen.value = false
+    return
+  }
+
+  try {
+    await store.clearStockBuyList()
+    for (const drafts of Object.values(numberDraftsByKey)) {
+      for (const key of Object.keys(drafts)) delete drafts[key]
+    }
+    clearListDialogOpen.value = false
+    showToast({
+      tone: 'success',
+      title: '待買清單已清空',
+      message: `已移除 ${itemCount} 檔待買股票；投資持倉不受影響。`,
+    })
+  } catch (error) {
+    store.error = ''
+    showToast({
+      tone: 'error',
+      title: '清空沒有完成',
+      message: error?.message || '無法儲存資料。',
+    })
+  }
+}
 </script>
 
 <template>
@@ -553,6 +586,15 @@ async function confirmDelete() {
         >
           <RotateCcw :size="18" aria-hidden="true" />
           Reset 今日紀錄
+        </button>
+        <button
+          class="btn btn-danger"
+          type="button"
+          :disabled="store.saving || !store.stockBuyList.length"
+          @click="clearListDialogOpen = true"
+        >
+          <Trash2 :size="18" aria-hidden="true" />
+          清空待買清單
         </button>
       </template>
     </PageHeader>
@@ -823,6 +865,20 @@ async function confirmDelete() {
             · {{ pendingDeleteItem.name }}</template
           ></strong
         >」會從清單永久移除。
+      </p>
+    </ConfirmDialog>
+
+    <ConfirmDialog
+      :open="clearListDialogOpen"
+      title="清空所有待買股票？"
+      confirm-label="確認全部清空"
+      :busy="store.saving"
+      @close="clearListDialogOpen = false"
+      @confirm="confirmClearList"
+    >
+      <p>
+        待買清單中的 <strong>{{ store.stockBuyList.length }} 檔股票</strong>
+        以及股數、成交價和成交狀態都會移除；既有投資持倉不受影響。
       </p>
     </ConfirmDialog>
   </div>

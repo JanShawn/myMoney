@@ -1,5 +1,5 @@
 <script setup>
-import { AlertCircle, CheckCircle2, ChevronDown, Cloud, CloudDownload, CloudUpload, Database, Download, FileJson, FilePlus2, FileSpreadsheet, History, Link2, Link2Off, RotateCcw, Save, Trash2, Upload, WalletMinimal } from '@lucide/vue'
+import { AlertCircle, CheckCircle2, ChevronDown, Database, Download, FileJson, FileSpreadsheet, History, RotateCcw, Save, Trash2, Upload, WalletMinimal } from '@lucide/vue'
 import { useMoneyStore } from '~/stores/money'
 
 const store = useMoneyStore()
@@ -10,41 +10,27 @@ const backups = ref([])
 const pendingRestoreAt = ref('')
 const pendingReset = ref(false)
 const pendingImport = shallowRef(null)
-const pendingSyncImport = shallowRef(null)
-const pendingSyncConflict = shallowRef(null)
 
 const cashReconciliationEnabled = computed(() => store.config?.settings?.cashReconciliationEnabled !== false)
 const jsonBackup = computed(() => store.storageStatus.jsonBackup)
-const syncFile = computed(() => store.storageStatus.syncFile)
-const syncIsCurrent = computed(() => syncFile.value.connected && !syncFile.value.hasLocalChanges)
 const pendingChanges = computed(() => jsonBackup.value.changes || [])
 const backupTotalBytes = computed(() => backups.value.reduce((total, backup) => total + Number(backup.sizeBytes || 0), 0))
-const syncPermissionLabel = computed(() => ({
-  granted: '已允許讀寫',
-  prompt: '使用時會請你允許',
-  denied: '權限已拒絕',
-  unavailable: '尚未取得權限'
-})[syncFile.value.permission] || '尚未確認')
 const storagePresentation = computed(() => {
-  if (syncIsCurrent.value) return {
-    badge: '同步檔案已是最新版', tone: 'current', source: 'sync', title: '目前資料已寫入同步檔案',
-    description: `${syncFile.value.fileName} · ${formatDate(syncFile.value.lastSyncedAt)}；JSON 備份是選用的額外快照。`
-  }
   if (!jsonBackup.value.exists) return {
-    badge: '尚未建立 JSON 備份', tone: 'neutral', source: 'json', title: '瀏覽器資料尚未匯出成 JSON 備份',
+    badge: '尚未建立 JSON 備份', tone: 'neutral', title: '瀏覽器資料尚未匯出成 JSON 備份',
     description: '目前資料已自動保存在這個瀏覽器；需要額外留存時，可下載一份 JSON 備份檔。'
   }
   if (jsonBackup.value.isCurrent) return {
-    badge: 'JSON 備份已是最新版', tone: 'current', source: 'json', title: '目前資料與最近一次 JSON 備份一致',
+    badge: 'JSON 備份已是最新版', tone: 'current', title: '目前資料與最近一次 JSON 備份一致',
     description: `${jsonBackup.value.fileName} · ${formatDate(jsonBackup.value.createdAt)}`
   }
   if (!jsonBackup.value.comparisonAvailable) return {
-    badge: '建議重新匯出 JSON', tone: 'pending', source: 'json', title: '找到舊版 JSON 備份紀錄，但無法完整比較內容',
+    badge: '建議重新匯出 JSON', tone: 'pending', title: '找到舊版 JSON 備份紀錄，但無法完整比較內容',
     description: '重新下載一次 JSON 備份後，系統就能準確判斷後續是否有尚未匯出的變更。'
   }
   return {
     badge: pendingChanges.value.length ? `${pendingChanges.value.length} 項尚未匯出` : '有變更尚未匯出',
-    tone: 'pending', source: 'json', title: '瀏覽器內有尚未匯出至 JSON 的變更',
+    tone: 'pending', title: '瀏覽器內有尚未匯出至 JSON 的變更',
     description: `最近一次 JSON 備份：${jsonBackup.value.fileName} · ${formatDate(jsonBackup.value.createdAt)}`
   }
 })
@@ -78,7 +64,11 @@ async function confirmImport() {
   try {
     await store.importJson(pendingImport.value.file)
     pendingImport.value = null
-    showToast({ tone: 'success', title: 'JSON 備份還原完成', message: `已從「${fileName}」還原；原本資料已保留在近期版本。` })
+    showToast({
+      tone: 'success',
+      title: 'JSON 資料已載入',
+      message: `已從「${fileName}」載入；原本資料已保留在近期版本。`
+    })
     await loadBackups()
   } catch { /* 詳細原因由全站錯誤提示呈現。 */ }
 }
@@ -105,82 +95,6 @@ async function exportExcel() {
   try {
     await store.exportExcel()
     showToast({ tone: 'success', title: 'Excel 匯出完成', message: '盤點歷史 Excel（.xlsx）已下載。' })
-  } catch { /* 詳細原因由全站錯誤提示呈現。 */ }
-}
-
-async function connectSyncFile() {
-  try {
-    const result = await store.connectSyncFile()
-    if (result.requiresImport) {
-      pendingSyncImport.value = result
-      showToast({ tone: 'info', title: '同步檔案已連結', message: `請確認是否載入「${result.fileName}」的最新內容。` })
-      return
-    }
-    showToast({
-      tone: 'success',
-      title: '同步檔案已連結',
-      message: `「${result.fileName}」與目前資料一致。`
-    })
-  } catch (error) {
-    if (error?.name === 'AbortError') showToast({ title: '已取消連結', message: '原本的瀏覽器資料不受影響。' })
-  }
-}
-
-async function createSyncFile() {
-  try {
-    const result = await store.createSyncFile()
-    showToast({ tone: 'success', title: '同步檔案已建立並驗證', message: `目前資料已寫入「${result.fileName}」，重新讀取確認為同步版本 ${result.revision}。` })
-  } catch (error) {
-    if (error?.name === 'AbortError') showToast({ title: '已取消建立', message: '原本的瀏覽器資料不受影響。' })
-  }
-}
-
-async function uploadSyncFile(force = false) {
-  try {
-    const result = await store.uploadSyncFile(force ? { force: true } : { chooseFile: true })
-    if (result.conflict) {
-      pendingSyncConflict.value = result
-      return
-    }
-    pendingSyncConflict.value = null
-    if (result.requiresPull) {
-      showToast({ tone: 'warning', title: '請先載入同步檔案最新版', message: `「${result.fileName}」有較新的內容，尚未覆蓋。請先載入、確認資料後再繼續修改。` })
-      return
-    }
-    showToast({
-      tone: 'success',
-      title: result.unchanged ? '同步檔案已重新核對' : '同步檔案已更新並驗證',
-      message: result.unchanged
-        ? `已重新讀取「${result.fileName}」，確認與目前瀏覽器資料一致。`
-        : `已寫入並重新讀取「${result.fileName}」，確認為同步版本 ${result.revision}。`
-    })
-  } catch { /* 詳細原因由全站錯誤提示呈現。 */ }
-}
-
-async function previewSyncFile() {
-  try {
-    pendingSyncImport.value = await store.previewSyncFile()
-  } catch { pendingSyncImport.value = null }
-}
-
-async function confirmSyncImport() {
-  if (!pendingSyncImport.value?.fingerprint) return
-  const fileName = pendingSyncImport.value.fileName
-  try {
-    await store.downloadSyncFile(pendingSyncImport.value.fingerprint)
-    pendingSyncImport.value = null
-    pendingSyncConflict.value = null
-    showToast({ tone: 'success', title: '已從同步檔案更新', message: `已載入「${fileName}」；原本資料已保留在近期版本。` })
-    await loadBackups()
-  } catch { /* 詳細原因由全站錯誤提示呈現。 */ }
-}
-
-async function disconnectSyncFile() {
-  try {
-    await store.disconnectSync()
-    pendingSyncImport.value = null
-    pendingSyncConflict.value = null
-    showToast({ title: '已解除連結', message: '同步檔案沒有被刪除，本機自動保存仍會繼續運作。' })
   } catch { /* 詳細原因由全站錯誤提示呈現。 */ }
 }
 
@@ -219,7 +133,7 @@ function formatBytes(bytes) {
 
 <template>
   <div>
-    <PageHeader eyebrow="Preferences & storage" title="設定" description="平常操作會自動保存在瀏覽器；需要跨電腦使用時，可選擇連結同步檔案。" />
+    <PageHeader eyebrow="Preferences & storage" title="設定" description="平常操作會自動保存在瀏覽器；透過 JSON 載入與下載備份，即可手動搬移資料。" />
     <UiPanel class="feature-panel" title="功能偏好" description="每位使用者都能選擇是否需要現金明細驗算。">
       <template #action><span class="pill" :class="{ 'pill-neutral': !cashReconciliationEnabled }">{{ cashReconciliationEnabled ? '已啟用現金驗算' : '帳戶直接管理' }}</span></template>
       <div class="feature-setting">
@@ -234,7 +148,7 @@ function formatBytes(bytes) {
       </div>
     </UiPanel>
 
-    <UiPanel class="storage-panel" title="保存狀態" description="資料已寫入同步檔案時，不需要另外下載 JSON；JSON 備份可作為額外的時間點快照。">
+    <UiPanel class="storage-panel" title="保存狀態" description="瀏覽器自動保存是主要資料來源；JSON 可用於備份，或手動在不同裝置間轉移資料。">
       <template #action>
         <span class="pill" :class="{ 'pill-blue': storagePresentation.tone === 'current', 'pill-warning': storagePresentation.tone === 'pending' }">{{ storagePresentation.badge }}</span>
       </template>
@@ -247,75 +161,35 @@ function formatBytes(bytes) {
         </div>
 
         <div class="storage-status-card" :class="`storage-status-card--${storagePresentation.tone}`">
-          <div class="storage-status-card__icon"><Cloud v-if="storagePresentation.source === 'sync'" :size="21" aria-hidden="true" /><FileJson v-else :size="21" aria-hidden="true" /></div>
+          <div class="storage-status-card__icon"><FileJson :size="21" aria-hidden="true" /></div>
           <div class="storage-status-card__copy"><strong>{{ storagePresentation.title }}</strong><span>{{ storagePresentation.description }}</span></div>
-          <AlertCircle v-if="storagePresentation.tone === 'pending'" :size="20" class="storage-status-card__state" aria-label="有資料尚未保存到外部檔案" />
-          <CheckCircle2 v-else-if="storagePresentation.tone === 'current'" :size="20" class="storage-status-card__state" aria-label="外部檔案已是最新版" />
+          <AlertCircle v-if="storagePresentation.tone === 'pending'" :size="20" class="storage-status-card__state" aria-label="有資料尚未匯出至 JSON" />
+          <CheckCircle2 v-else-if="storagePresentation.tone === 'current'" :size="20" class="storage-status-card__state" aria-label="JSON 備份已是最新版" />
         </div>
       </div>
 
-      <AppNotice v-if="!syncIsCurrent && jsonBackup.exists && !jsonBackup.isCurrent && jsonBackup.comparisonAvailable" tone="warning" :title="`${pendingChanges.length || '有'}項變更尚未匯出至 JSON`">
+      <AppNotice v-if="jsonBackup.exists && !jsonBackup.isCurrent && jsonBackup.comparisonAvailable" tone="warning" :title="`${pendingChanges.length || '有'}項變更尚未匯出至 JSON`">
         <ul v-if="pendingChanges.length" class="pending-change-list"><li v-for="change in pendingChanges.slice(0, 5)" :key="change">{{ change }}</li></ul>
         <span v-if="pendingChanges.length > 5">另有 {{ pendingChanges.length - 5 }} 項變更。</span>
       </AppNotice>
 
       <div class="backup-actions">
         <button class="btn btn-primary" type="button" :disabled="store.saving" @click="saveJson"><Save :size="18" />{{ store.saving ? '處理中…' : '下載 JSON 備份' }}</button>
-        <button class="btn btn-secondary" type="button" :disabled="store.saving" @click="jsonInput?.click()"><Upload :size="18" />從 JSON 備份還原</button>
+        <button class="btn btn-secondary" type="button" :disabled="store.saving" @click="jsonInput?.click()"><Upload :size="18" />從 JSON 載入／還原</button>
         <input ref="jsonInput" class="sr-only" type="file" accept=".json,application/json" @change="selectJson" />
       </div>
-      <p v-if="syncIsCurrent" class="backup-action-note">同步檔案已保存目前資料，不必為了消除提示另外下載；若想保留某個時間點，再選用 JSON 備份即可。</p>
-      <p v-else class="backup-action-note">JSON 備份檔名會自動加入日期時間，例如 myMoney-backup-2026-09-18-1730.json，避免不同時間的備份互相覆蓋。</p>
+      <p class="backup-action-note">JSON 備份檔名會自動加入日期時間，例如 myMoney-backup-2026-09-18-1730.json，避免不同時間的備份互相覆蓋。</p>
+
+      <AppNotice tone="info" title="跨裝置使用：載入最新版 → 修改 → 下載備份">
+        換裝置或雲端有更新時，先下載雲端最新版 JSON，再從這裡載入並確認內容。修改完成後下載新的 JSON 備份，最後到雲端手動上傳並取代原檔；myMoney 不會連線雲端帳號，也不會自動上傳。
+      </AppNotice>
+      <p class="backup-action-note">目前瀏覽器資料已是最新版時，直接修改並下載備份即可，不必每次先還原；修改後載入舊檔會取代目前資料，請先備份尚未保存到檔案的變更。</p>
 
       <details class="technical-details">
         <summary>網址與 Port 說明</summary>
         <div class="storage-origin"><strong>目前瀏覽器資料位置</strong><code>{{ currentOrigin }}</code><span>網址或 Port 改變時，瀏覽器會使用另一份獨立資料。</span></div>
       </details>
-    </UiPanel>
 
-    <UiPanel class="settings-section sync-panel" title="同步檔案（選用）" description="手動讀寫 Google Drive 電腦版或其他同步資料夾裡的固定 JSON；未啟用時不影響任何既有功能。">
-      <template #action>
-        <div class="backup-panel-action"><Cloud :size="20" aria-hidden="true" /><span class="pill" :class="{ 'pill-blue': syncFile.connected, 'pill-neutral': !syncFile.connected }">{{ syncFile.connected ? '已連結' : '未啟用' }}</span></div>
-      </template>
-
-      <AppNotice v-if="!syncFile.supported" tone="warning" title="此瀏覽器不支援固定同步檔案">
-        本機自動保存與一般 JSON 備份仍可正常使用；若要使用固定同步檔案，請改用最新版 Chrome 或 Edge。
-      </AppNotice>
-
-      <template v-else-if="!syncFile.connected">
-        <AppNotice tone="info" title="不使用 Google Drive 也能正常使用">
-          這是完全選用的功能。若要啟用，可選擇 Google Drive 電腦版「我的雲端硬碟」裡的 JSON；myMoney 不會登入或讀取你的 Google 帳號。
-        </AppNotice>
-        <div class="sync-connect-actions">
-          <button class="btn btn-primary" type="button" :disabled="store.saving" @click="connectSyncFile"><Link2 :size="18" />連結既有同步檔案</button>
-          <button class="btn btn-secondary" type="button" :disabled="store.saving" @click="createSyncFile"><FilePlus2 :size="18" />建立新的同步檔案</button>
-        </div>
-        <p class="backup-action-note">連結既有檔案後會立即顯示內容摘要並詢問是否載入；建立新檔則會直接寫入目前瀏覽器資料。</p>
-      </template>
-
-      <template v-else>
-        <div class="sync-status-card">
-          <div class="sync-status-card__icon"><Cloud :size="22" aria-hidden="true" /></div>
-          <div class="sync-status-card__copy">
-            <strong>{{ syncFile.fileName }}</strong>
-            <span>上次同步：{{ formatDate(syncFile.lastSyncedAt) }}</span>
-            <span>檔案版本（資料最後修改）：{{ formatDate(syncFile.lastRemoteUpdatedAt, true) }}</span>
-            <small>{{ syncPermissionLabel }}</small>
-          </div>
-          <span class="pill" :class="{ 'pill-warning': syncFile.hasLocalChanges, 'pill-blue': !syncFile.hasLocalChanges }">{{ syncFile.hasLocalChanges ? '本機有變更' : '內容已同步' }}</span>
-        </div>
-
-        <div class="sync-actions">
-          <button class="btn btn-secondary" type="button" :disabled="store.saving" @click="previewSyncFile"><CloudDownload :size="18" />① 載入同步檔案最新版</button>
-          <button class="btn btn-primary" type="button" :disabled="store.saving" @click="uploadSyncFile(false)"><CloudUpload :size="18" />② 選擇檔案並覆蓋</button>
-          <button class="btn btn-ghost" type="button" :disabled="store.saving" @click="disconnectSyncFile"><Link2Off :size="18" />解除連結</button>
-        </div>
-
-        <AppNotice tone="info" title="建議流程：先載入，修改後再覆蓋">
-          檔案版本以資料最後修改時間為準。開始修改前先按「① 載入同步檔案最新版」；完成修改後按「② 選擇檔案並覆蓋」，成功寫入後就視為已有外部副本，不必再另外匯出 JSON。不確定檔案是否有其他電腦的新內容時，請先載入再覆蓋。
-        </AppNotice>
-        <p class="backup-action-note">解除連結只會讓這個瀏覽器忘記檔案，不會刪除 Google Drive 裡的 JSON；之後仍可重新連結。</p>
-      </template>
     </UiPanel>
 
     <UiPanel title="瀏覽器近期版本" description="每次實際編輯前保留上一版，最多保留最新 3 份。" class="settings-section">
@@ -360,31 +234,18 @@ function formatBytes(bytes) {
       <button class="btn btn-danger" type="button" :disabled="store.saving" @click="pendingReset = true"><Trash2 :size="18" />重設所有資料</button>
     </UiPanel>
 
-    <ConfirmDialog :open="Boolean(pendingImport)" :title="`從「${pendingImport?.fileName || 'JSON 備份檔'}」還原？`" confirm-label="確認還原" tone="warning" :busy="store.saving" @close="pendingImport = null" @confirm="confirmImport">
+    <ConfirmDialog :open="Boolean(pendingImport)" :title="`從「${pendingImport?.fileName || 'JSON 檔案'}」載入？`" confirm-label="確認載入" tone="warning" :busy="store.saving" @close="pendingImport = null" @confirm="confirmImport">
       <p>檔案內有 {{ pendingImport?.summary?.accounts || 0 }} 個帳戶、{{ pendingImport?.summary?.holdings || 0 }} 筆持倉、{{ pendingImport?.summary?.stockBuyListItems || 0 }} 檔待買股票、{{ pendingImport?.summary?.recurringCashflowItems || 0 }} 筆週期收支、{{ pendingImport?.summary?.snapshots || 0 }} 筆盤點。</p>
       <p v-if="pendingImport?.changes?.length">與目前瀏覽器資料相比，會產生 {{ pendingImport.changes.length }} 項變更。</p>
       <p v-else>檔案內容與目前瀏覽器資料沒有實質差異。</p>
-      <AppNotice v-if="pendingImport && !pendingImport.hasUserData" tone="warning" title="這份檔案沒有使用者資料">復原後會只剩下系統預設帳戶，請確認這是你要的版本。</AppNotice>
-      <p>確認前，原本的瀏覽器資料會先保留在近期版本；不會與檔案建立長期連結。</p>
-    </ConfirmDialog>
-
-    <ConfirmDialog :open="Boolean(pendingSyncImport)" :title="`從「${pendingSyncImport?.fileName || '同步檔案'}」更新？`" confirm-label="使用同步檔案" tone="warning" :busy="store.saving" @close="pendingSyncImport = null" @confirm="confirmSyncImport">
-      <p>同步檔案內有 {{ pendingSyncImport?.summary?.accounts || 0 }} 個帳戶、{{ pendingSyncImport?.summary?.holdings || 0 }} 筆持倉、{{ pendingSyncImport?.summary?.stockBuyListItems || 0 }} 檔待買股票、{{ pendingSyncImport?.summary?.snapshots || 0 }} 筆盤點。</p>
-      <p v-if="pendingSyncImport?.changes?.length">套用後會產生 {{ pendingSyncImport.changes.length }} 項資料變更；檔案更新時間為 {{ formatDate(pendingSyncImport.updatedAt) }}。</p>
-      <p v-else>同步檔案與目前瀏覽器資料沒有實質差異。</p>
-      <AppNotice v-if="pendingSyncImport && !pendingSyncImport.hasUserData" tone="warning" title="同步檔案沒有使用者資料">套用後會只剩系統預設帳戶，請確認這是你要的版本。</AppNotice>
-      <p>套用前會先保留目前瀏覽器版本，且不會自動修改同步檔案。</p>
-    </ConfirmDialog>
-
-    <ConfirmDialog :open="Boolean(pendingSyncConflict)" title="本機與同步檔案都有變更" confirm-label="仍以上傳覆蓋" tone="warning" :busy="store.saving" @close="pendingSyncConflict = null" @confirm="uploadSyncFile(true)">
-      <p>「{{ pendingSyncConflict?.fileName }}」與目前瀏覽器內容不同，檔案更新時間為 {{ formatDate(pendingSyncConflict?.remoteUpdatedAt) }}。</p>
-      <p>直接上傳會以目前瀏覽器資料覆蓋該版本。若不確定，請取消後先使用「從同步檔案更新」查看內容。</p>
+      <AppNotice v-if="pendingImport && !pendingImport.hasUserData" tone="warning" title="這份檔案沒有使用者資料">載入後會只剩下系統預設帳戶，請確認這是你要的版本。</AppNotice>
+      <p>載入會取代目前瀏覽器資料，不會合併，也不會修改你選取的 JSON 檔案；原本資料會保留在近期版本。</p>
     </ConfirmDialog>
 
     <ConfirmDialog :open="pendingReset" title="確定要重設所有資料？" confirm-label="確認重設" :busy="store.saving" @close="pendingReset = false" @confirm="resetAllData">
       <p>目前的帳戶、持倉、待買股票、盤點、現金驗算與週期收支都會清空，系統會回到初始狀態。</p>
       <p><strong>重設前的內容會先保留在近期版本</strong>，之後仍可從上方的「瀏覽器近期版本」復原。</p>
-      <p>「變更尚未匯出至 JSON」狀態也會清除；電腦上的 JSON 備份與同步檔案不會被刪除，既有同步連結也會保留。</p>
+      <p>「變更尚未匯出至 JSON」狀態也會清除；電腦上的 JSON 檔案不會被刪除。</p>
     </ConfirmDialog>
   </div>
 </template>
@@ -422,15 +283,6 @@ function formatBytes(bytes) {
 .pending-change-list { display: grid; gap: 4px; margin: 0; padding-left: 18px; overflow-wrap: anywhere; }
 .backup-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .backup-action-note { margin: 0; overflow-wrap: anywhere; color: var(--muted); font-size: .77rem; line-height: 1.5; }
-.sync-panel :deep(.panel__header) { flex-wrap: wrap; }
-.sync-panel :deep(.panel__body) { display: grid; gap: 14px; }
-.sync-connect-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.sync-status-card { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 15px; border: 1px solid var(--notice-border); border-radius: var(--radius-md); background: linear-gradient(145deg, var(--primary-soft), var(--surface)); }
-.sync-status-card__icon { width: 46px; height: 46px; display: grid; place-items: center; border-radius: 13px; background: var(--surface); color: var(--primary); box-shadow: 0 3px 10px rgba(19, 72, 66, .06); }
-.sync-status-card__copy { display: grid; gap: 3px; min-width: 0; }
-.sync-status-card__copy strong { overflow-wrap: anywhere; font-size: .88rem; }
-.sync-status-card__copy span, .sync-status-card__copy small { color: var(--muted); font-size: .76rem; line-height: 1.45; }
-.sync-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 10px; }
 .technical-details { border-top: 1px solid var(--border); padding-top: 10px; }
 .technical-details summary { width: fit-content; color: var(--muted); cursor: pointer; font-size: .78rem; font-weight: 700; }
 .technical-details[open] summary { margin-bottom: 9px; color: var(--text-soft); }
@@ -464,11 +316,8 @@ function formatBytes(bytes) {
   .feature-setting { grid-template-columns: 42px minmax(0, 1fr); align-items: start; }
   .feature-switch { grid-column: 1 / -1; justify-self: end; margin-top: -4px; }
   .storage-panel :deep(.panel__action) { width: 100%; justify-content: flex-start; }
-  .backup-actions, .backup-item, .sync-connect-actions, .sync-actions { grid-template-columns: 1fr; }
-  .backup-actions .btn, .sync-connect-actions .btn, .sync-actions .btn { width: 100%; }
-  .sync-panel :deep(.panel__action) { width: 100%; justify-content: flex-start; }
-  .sync-status-card { grid-template-columns: 42px minmax(0, 1fr); align-items: start; }
-  .sync-status-card > .pill { grid-column: 1 / -1; justify-self: start; }
+  .backup-actions, .backup-item { grid-template-columns: 1fr; }
+  .backup-actions .btn { width: 100%; }
   .backup-item > .btn { width: 100%; }
   .confirm-actions { flex-direction: column; }
 }

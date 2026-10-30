@@ -337,6 +337,12 @@ export const useMoneyStore = defineStore('money', () => {
     return item
   })
 
+  const clearStockBuyList = () => mutate((draft) => {
+    const removedItems = [...(draft.stockBuyList || [])]
+    draft.stockBuyList = []
+    return removedItems
+  })
+
   const resetStockBuyListDaily = () => mutate((draft) => {
     for (const item of draft.stockBuyList || []) {
       item.buyPrice = 0
@@ -606,7 +612,7 @@ export const useMoneyStore = defineStore('money', () => {
     activeItems, activeHoldings, stockBuyList, recurringCashflowItems, lastSnapshot,
     load, addGroup, updateGroup, deleteGroup, addItem, updateItem, deleteItem, moveItem, addHolding, updateHolding, deleteHolding, moveHolding,
     updateSettings, updateCashDraft, addRecurringCashflowItem, updateRecurringCashflowItem, deleteRecurringCashflowItem, swapRecurringCashflowItems, moveRecurringCashflowItem,
-    addStockBuyListItem, updateStockBuyListItem, deleteStockBuyListItem, resetStockBuyListDaily, updateStockBuyListNames,
+    addStockBuyListItem, updateStockBuyListItem, deleteStockBuyListItem, clearStockBuyList, resetStockBuyListDaily, updateStockBuyListNames,
     lookupHolding, lookupStockName, loadStockBuyListQuotes, marketPreview, refreshExchangeRates, saveSnapshot, deleteSnapshot,
     saveJson, previewJsonImport, importJson,
     connectSyncFile, createSyncFile, uploadSyncFile, previewSyncFile, downloadSyncFile, disconnectSync,

@@ -50,4 +50,29 @@ describe('週期收支換算', () => {
     expect(calculateRecurringCashflowForMonth(items, 2)).toEqual({ income: 90000, expense: 42000, netCashflow: 48000 })
     expect(calculateRecurringCashflowForMonth(items, 3)).toEqual({ income: 60000, expense: 18000, netCashflow: 42000 })
   })
+
+  it('整年度總額等於十二個月份的實際收支加總', () => {
+    const items = [
+      { type: 'income', amount: 60000, frequency: 'monthly' },
+      { type: 'income', amount: 30000, frequency: 'quarterly', occurrenceMonth: 2 },
+      { type: 'income', amount: 10000, frequency: 'semiannual', occurrenceMonth: 11 },
+      { type: 'expense', amount: 18000, frequency: 'monthly' },
+      { type: 'expense', amount: 24000, frequency: 'annual', occurrenceMonth: 2 }
+    ]
+    const totals = Array.from({ length: 12 }, (_, index) =>
+      calculateRecurringCashflowForMonth(items, index + 1)
+    ).reduce((sum, month) => ({
+      income: sum.income + month.income,
+      expense: sum.expense + month.expense,
+      netCashflow: sum.netCashflow + month.netCashflow
+    }), { income: 0, expense: 0, netCashflow: 0 })
+    const annualPlan = calculateRecurringCashflow(items)
+
+    expect(totals).toEqual({ income: 860000, expense: 240000, netCashflow: 620000 })
+    expect(totals).toEqual({
+      income: annualPlan.annualIncome,
+      expense: annualPlan.annualExpense,
+      netCashflow: annualPlan.annualNetCashflow
+    })
+  })
 })

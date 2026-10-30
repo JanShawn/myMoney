@@ -5,9 +5,6 @@ import { useMoneyStore } from '~/stores/money'
 const store = useMoneyStore()
 const { isDark, toggleTheme } = useTheme()
 const navigationStorage = computed(() => {
-  const sync = store.storageStatus.syncFile
-  if (sync.connected && !sync.hasLocalChanges) return { detail: '同步檔案已是最新版', state: 'current' }
-  if (sync.connected && sync.hasLocalChanges) return { detail: '有變更尚未寫入同步檔案', state: 'pending' }
   const backup = store.storageStatus.jsonBackup
   if (!backup.exists) return { detail: '尚未建立 JSON 備份', state: 'neutral' }
   if (backup.isCurrent) return { detail: 'JSON 備份已是最新版', state: 'current' }

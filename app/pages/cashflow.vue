@@ -17,7 +17,7 @@ const collapsedGroups = reactive({ income: false, expense: false })
 const draggingItemId = ref('')
 const dragOverItemId = ref('')
 const dragOverPlacement = ref('after')
-const selectedMonth = ref(new Date().getMonth() + 1)
+const selectedPeriod = ref(new Date().getMonth() + 1)
 const selectionMode = ref(false)
 const selectedItemIds = ref([])
 
@@ -29,6 +29,9 @@ const frequencyOptions = [
 ]
 const frequencyLabels = Object.fromEntries(frequencyOptions.map((option) => [option.value, option.label]))
 const monthOptions = Array.from({ length: 12 }, (_, index) => ({ value: index + 1, label: `${index + 1} 月` }))
+const periodOptions = [{ value: 'annual', label: '整年度' }, ...monthOptions]
+const isAnnualView = computed(() => selectedPeriod.value === 'annual')
+const periodLabel = computed(() => isAnnualView.value ? '整年度' : `${selectedPeriod.value} 月`)
 const sortOptions = [
   { value: 'custom', label: '自訂排序' },
   { value: 'occurrenceMonth', label: '發生月份' },
@@ -71,10 +74,18 @@ const incomeItems = computed(() => sortItems(rawIncomeItems.value))
 const expenseItems = computed(() => sortItems(rawExpenseItems.value))
 const pendingDeleteItem = computed(() => store.recurringCashflowItems.find((item) => item.id === pendingDeleteId.value) || null)
 const editingItem = computed(() => store.recurringCashflowItems.find((item) => item.id === editingId.value) || null)
-const monthItems = computed(() => store.recurringCashflowItems.filter((item) => recurringCashflowOccurrenceMonths(item).includes(Number(selectedMonth.value))))
-const monthIncomeCount = computed(() => monthItems.value.filter((item) => item.type === 'income').length)
-const monthExpenseCount = computed(() => monthItems.value.filter((item) => item.type === 'expense').length)
-const monthlyPlan = computed(() => calculateRecurringCashflowForMonth(store.recurringCashflowItems, selectedMonth.value))
+const periodItems = computed(() => isAnnualView.value
+  ? store.recurringCashflowItems
+  : store.recurringCashflowItems.filter((item) => recurringCashflowOccurrenceMonths(item).includes(Number(selectedPeriod.value))))
+const periodIncomeCount = computed(() => periodItems.value.filter((item) => item.type === 'income').length)
+const periodExpenseCount = computed(() => periodItems.value.filter((item) => item.type === 'expense').length)
+const periodPlan = computed(() => isAnnualView.value
+  ? {
+      income: store.cashflowPlan.annualIncome,
+      expense: store.cashflowPlan.annualExpense,
+      netCashflow: store.cashflowPlan.annualNetCashflow
+    }
+  : calculateRecurringCashflowForMonth(store.recurringCashflowItems, selectedPeriod.value))
 const remainingPlan = computed(() => calculateRecurringCashflow(
   store.recurringCashflowItems.filter((item) => !selectedItemIds.value.includes(item.id))
 ))
@@ -224,27 +235,27 @@ watch(() => store.recurringCashflowItems.map((item) => item.id), (itemIds) => {
 
 <template>
   <div>
-    <PageHeader eyebrow="Cashflow planning" title="收支規劃" description="建立週期收支項目，查看指定月份實際會發生的收入與支出。">
+    <PageHeader eyebrow="Cashflow planning" title="收支規劃" description="建立週期收支項目，查看指定月份或整年度預計發生的收入與支出。">
       <template #actions>
         <div class="cashflow-page-actions">
-          <label for="cashflow-view-month">查看月份</label>
-          <UiSelect id="cashflow-view-month" v-model="selectedMonth" :options="monthOptions" aria-label="選擇要查看的收支月份" />
+          <label for="cashflow-view-period">查看期間</label>
+          <UiSelect id="cashflow-view-period" v-model="selectedPeriod" :options="periodOptions" aria-label="選擇要查看的收支月份或整年度" />
           <span class="pill pill-neutral"><CalendarRange :size="16" aria-hidden="true" />{{ store.recurringCashflowItems.length }} 筆週期項目</span>
         </div>
       </template>
     </PageHeader>
 
     <div class="metric-grid cashflow-metrics">
-      <MetricCard :label="`${selectedMonth} 月固定收入`" :value="money(monthlyPlan.income)" :note="`${monthIncomeCount} 筆會發生 · 月均 ${money(store.cashflowPlan.monthlyIncome)}`">
+      <MetricCard :label="`${periodLabel}固定收入`" :value="money(periodPlan.income)" :note="`${periodIncomeCount} 筆項目 · 月均 ${money(store.cashflowPlan.monthlyIncome)}`">
         <template #icon><ArrowUpRight :size="18" aria-hidden="true" /></template>
       </MetricCard>
-      <MetricCard :label="`${selectedMonth} 月固定支出`" :value="money(monthlyPlan.expense)" :note="`${monthExpenseCount} 筆會發生 · 月均 ${money(store.cashflowPlan.monthlyExpense)}`">
+      <MetricCard :label="`${periodLabel}固定支出`" :value="money(periodPlan.expense)" :note="`${periodExpenseCount} 筆項目 · 月均 ${money(store.cashflowPlan.monthlyExpense)}`">
         <template #icon><ArrowDownRight :size="18" aria-hidden="true" /></template>
       </MetricCard>
-      <MetricCard :label="`${selectedMonth} 月預估淨現金流`" :value="money(monthlyPlan.netCashflow)" :note="monthlyPlan.netCashflow >= 0 ? '當月收入高於支出' : '當月支出高於收入'" :tone="monthlyPlan.netCashflow < 0 ? 'negative' : ''">
+      <MetricCard :label="`${periodLabel}預估淨現金流`" :value="money(periodPlan.netCashflow)" :note="`${isAnnualView ? '全年' : '當月'}${periodPlan.netCashflow >= 0 ? '收入高於或等於支出' : '支出高於收入'}`" :tone="periodPlan.netCashflow < 0 ? 'negative' : ''">
         <template #icon><WalletCards :size="18" aria-hidden="true" /></template>
       </MetricCard>
-      <MetricCard label="年度預估總收入" :value="money(store.cashflowPlan.annualIncome)" :note="`年度總支出 ${money(store.cashflowPlan.annualExpense)}`">
+      <MetricCard :label="isAnnualView ? '月均預估淨現金流' : '年度預估總收入'" :value="money(isAnnualView ? store.cashflowPlan.monthlyNetCashflow : store.cashflowPlan.annualIncome)" :note="isAnnualView ? '依各項週期換算全年後除以 12 個月' : `年度總支出 ${money(store.cashflowPlan.annualExpense)}`">
         <template #icon><CalendarRange :size="18" aria-hidden="true" /></template>
       </MetricCard>
     </div>
@@ -445,8 +456,8 @@ watch(() => store.recurringCashflowItems.map((item) => item.id), (itemIds) => {
 .cashflow-metrics :deep(.metric-card:first-child .metric-label), .cashflow-metrics :deep(.metric-card:first-child .metric-note) { color: var(--muted); }
 .cashflow-page-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .cashflow-page-actions > label { color: var(--muted); font-size: .78rem; font-weight: 700; white-space: nowrap; }
-.cashflow-page-actions :deep(.ui-select) { width: 96px; }
-.cashflow-page-actions :deep(.ui-select__trigger) { min-height: 38px; padding-block: 7px; font-size: .8rem; }
+.cashflow-page-actions :deep(.ui-select) { width: 160px; flex-shrink: 0; }
+.cashflow-page-actions :deep(.ui-select__trigger) { min-height: 46px; padding: 10px 14px; font-size: .9rem; }
 .cashflow-workspace { align-items: start; }
 .cashflow-form-column { position: sticky; top: 18px; }
 .cashflow-list-panel :deep(.panel__header) { padding-bottom: 14px; }

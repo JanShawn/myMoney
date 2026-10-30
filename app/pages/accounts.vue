@@ -172,8 +172,11 @@ function editItem(item) {
 }
 function revealInlineEditor(itemId) {
   const editor = document.getElementById(`account-editor-${itemId}`)
+  const amountInput = document.getElementById(`edit-amount-${itemId}`)
   const nameInput = document.getElementById(`edit-name-${itemId}`)
-  nameInput?.focus({ preventScroll: true })
+  const focusTarget = amountInput?.disabled ? nameInput : amountInput
+  focusTarget?.focus({ preventScroll: true })
+  if (focusTarget === amountInput) amountInput.select()
   editor?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
 }
 async function saveEdit() {
